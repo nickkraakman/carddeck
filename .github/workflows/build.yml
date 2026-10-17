@@ -1,0 +1,84 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # Core library + CLI tests (synthetic fixtures; the private sample cards are not in the repo,
+  # so the sample-based fidelity tests print SKIP here).
+  test-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fonts for the text tests
+        run: sudo apt-get update && sudo apt-get install -y fonts-liberation fonts-dejavu-core
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo clippy --workspace --all-targets
+      - run: cargo test --workspace --release
+
+  # Same tests on macOS: exercises the real macOS font fallbacks (Helvetica Neue, Times New Roman, ...).
+  test-macos:
+    runs-on: macos-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo test --workspace --release
+
+  # Unsigned (ad-hoc signed) macOS apps. Both architectures are built on the Apple-silicon runner.
+  macos:
+    needs: test-linux
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: aarch64-apple-darwin
+            label: arm64
+          - target: x86_64-apple-darwin
+            label: x86_64
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            . -> target
+            src-tauri -> target
+      - name: Cache tauri-cli
+        id: tauri-cli
+        uses: actions/cache@v4
+        with:
+          path: ~/.cargo/bin/cargo-tauri
+          key: tauri-cli-2-${{ runner.os }}
+      - name: Install tauri-cli
+        if: steps.tauri-cli.outputs.cache-hit != 'true'
+        run: cargo install tauri-cli --version "^2" --locked
+      - name: Build app + dmg
+        working-directory: src-tauri
+        run: cargo tauri build --target ${{ matrix.target }} --bundles app,dmg
+      - name: Collect artifacts
+        run: |
+          mkdir -p dist
+          B=src-tauri/target/${{ matrix.target }}/release/bundle
+          cp "$B"/dmg/*.dmg "dist/CardDeck-${{ matrix.label }}.dmg"
+          ditto -c -k --keepParent "$B/macos/CardDeck.app" "dist/CardDeck-${{ matrix.label }}.app.zip"
+          ls -la dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: CardDeck-macOS-${{ matrix.label }}
+          path: dist/*
+          if-no-files-found: error

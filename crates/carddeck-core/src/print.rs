@@ -389,7 +389,7 @@ pub fn validate_against_ppd(o: &PrintOptions, ppd: &BTreeMap<String, PpdOption>)
         }
         match ppd.get(&k) {
             None => problems.push(format!("The printer has no option {k}; it will be ignored")),
-            Some(opt) if !opt.choices.iter().any(|c| *c == v) => {
+            Some(opt) if !opt.choices.contains(&v) => {
                 problems.push(format!("Option {k} has no value {v} (choices: {})", opt.choices.join(", ")))
             }
             _ => {}

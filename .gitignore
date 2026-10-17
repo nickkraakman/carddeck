@@ -1,0 +1,12 @@
+target/
+node_modules/
+samples/
+*.card
+!tests/fixtures/*.card
+out/
+dist/
+.DS_Store
+*.dmg
+*.app
+src-tauri/gen/
+src-tauri/target/

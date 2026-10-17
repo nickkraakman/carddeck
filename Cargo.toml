@@ -1,0 +1,19 @@
+[workspace]
+resolver = "2"
+members = ["crates/carddeck-core", "crates/carddeck-cli"]
+# The Tauri shell (src-tauri) needs system WebKit headers on Linux, so it is
+# built separately (`cd src-tauri && cargo tauri build`, or in CI on macOS).
+exclude = ["src-tauri"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
+codegen-units = 4

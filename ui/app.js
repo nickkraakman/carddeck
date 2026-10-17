@@ -14,22 +14,6 @@ function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 
 // ---- viewer -----------------------------------------------------------------------------------
 
-function syncColourCorrectFromCard() {
-  const c = state.card;
-  const sel = $('colour-correct');
-  const v = (c && c.colour_correction) || 'None';
-  if (![...sel.options].some((o) => o.value === v)) {
-    const o = document.createElement('option');
-    o.value = v;
-    o.textContent = v;
-    sel.appendChild(o);
-  }
-  sel.value = v;
-  $('colour-note').textContent = c && c.path
-    ? 'Saved in this .card file (adjustments.correction), same field Hub uses.'
-    : 'Not saved until the card is a real .card file on disk.';
-}
-
 function render() {
   const c = state.card;
   $('empty').classList.toggle('hidden', !!c);
@@ -66,7 +50,6 @@ function render() {
   } else {
     w.classList.add('hidden');
   }
-  syncColourCorrectFromCard();
   updatePrintButtons();
   const bothOpt = $('sides').querySelector('option[value="both"]');
   if (!c.double_sided) { $('sides').value = 'front'; } else if ($('sides').value === 'front' && !state.userSides) { $('sides').value = 'both'; }
@@ -88,6 +71,7 @@ async function loadCard(promise) {
     state.fit = true;
     state.userSides = false;
     $('print-preview').classList.add('hidden');
+    setupColour(c);
     render();
     setStatus(`Opened ${c.name}`, 'ok');
   } catch (e) {
@@ -101,16 +85,92 @@ async function chooseFile() {
   if (p) openPath(Array.isArray(p) ? p[0] : p);
 }
 
-async function onColourCorrectChange() {
-  const v = $('colour-correct').value;
-  if (!state.card) return;
-  state.card.colour_correction = v;
+// ---- colour correction (preview only) ---------------------------------------------------------
+
+const SLIDERS = ['brightness', 'contrast', 'saturation', 'red', 'green', 'blue'];
+const SLIDER_DEFAULTS = { brightness: 0, contrast: 0, saturation: 0, red: 1, green: 1, blue: 1 };
+let ccTimer = null;
+let ccBusy = false;
+let ccPending = null;
+
+function currentAdjustments() {
+  const a = { correction: $('cc-correction').value };
+  for (const k of SLIDERS) a[k] = parseFloat($('cc-' + k).value);
+  return a;
+}
+
+function fmt(k, v) {
+  return k === 'red' || k === 'green' || k === 'blue' ? Number(v).toFixed(2) : Number(v).toFixed(k === 'brightness' ? 2 : 1);
+}
+
+function showAdjustments(a) {
+  $('cc-correction').value = a.correction;
+  for (const k of SLIDERS) { $('cc-' + k).value = a[k]; $('cc-' + k + '-v').textContent = fmt(k, a[k]); }
+  updateCorrectionNote();
+}
+
+function setupColour(c) {
+  const sel = $('cc-correction');
+  sel.innerHTML = c.corrections.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('');
+  showAdjustments(c.adjustments);
+  $('colour-box').classList.toggle('disabled', !c);
+  $('cc-save').disabled = !c.can_save;
+  $('cc-autosave').disabled = !c.can_save;
+  setCcState(c.can_save ? (c.has_adjustments ? 'from file' : 'file has no settings yet (Hub default)') : 'built-in card, nothing to save', '');
+}
+
+function setCcState(text, kind) {
+  const el = $('cc-state');
+  el.textContent = text;
+  el.className = 'note ' + (kind || '');
+}
+
+function updateCorrectionNote() {
+  const c = state.card;
+  if (!c) { $('cc-note').textContent = ''; return; }
+  const o = c.corrections.find((x) => x.id === $('cc-correction').value);
+  $('cc-note').textContent = o.driver_exact
+    ? `On screen only. When printing, the driver gets ColourCorrection=${o.driver_choice}; the bitmap is not corrected. Sliders are preview only.`
+    : `${o.label} has no driver option: on screen only. The printer gets ColourCorrection=${o.driver_choice} (no correction) unless "apply to the printed bitmap" is ticked.`;
+}
+
+function applyPreviews(p) {
+  state.card.front = p.front;
+  state.card.back = p.back;
+  document.querySelectorAll('#stage img').forEach((img) => { img.src = img.alt === 'back' ? p.back : p.front; });
+}
+
+async function pushAdjustments(save) {
+  // one request at a time; the latest settings win
+  if (ccBusy) { ccPending = { save: save || (ccPending && ccPending.save) }; return; }
+  ccBusy = true;
   try {
-    await invoke('set_colour_correction', { correction: v });
-    setStatus(state.card.path ? `Colour correct saved: ${v}` : `Colour correct: ${v}`, 'ok');
+    const r = await invoke('set_adjustments', { adj: currentAdjustments(), save: !!save });
+    applyPreviews(r.previews);
+    if (r.saved) setCcState('saved to file', 'ok');
+    else if (r.dirty) setCcState('not saved to file', 'dirty');
   } catch (e) {
     setStatus(String(e), 'error');
+  } finally {
+    ccBusy = false;
+    if (ccPending) { const p = ccPending; ccPending = null; pushAdjustments(p.save); }
   }
+}
+
+function onAdjust(commit) {
+  for (const k of SLIDERS) $('cc-' + k + '-v').textContent = fmt(k, $('cc-' + k).value);
+  updateCorrectionNote();
+  const save = commit && $('cc-autosave').checked && state.card && state.card.can_save;
+  if (!commit) { clearTimeout(ccTimer); ccTimer = setTimeout(() => pushAdjustments(false), 30); return; }
+  clearTimeout(ccTimer);
+  pushAdjustments(save);
+}
+
+async function saveColour() {
+  try {
+    await invoke('save_adjustments');
+    setCcState('saved to file', 'ok');
+  } catch (e) { setStatus(String(e), 'error'); }
 }
 
 // ---- printing ---------------------------------------------------------------------------------
@@ -122,7 +182,7 @@ function jobOpts() {
     copies: Math.max(1, parseInt($('copies').value, 10) || 1),
     overcoat_front: $('oc-front').checked,
     overcoat_back: $('oc-back').checked,
-    colour_correction: $('colour-correct').value || null,
+    bake_adjustments: $('bake').checked,
     extra: $('extra').value.split('\n').map((s) => s.trim()).filter(Boolean),
   };
 }
@@ -215,7 +275,14 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('printer-refresh').onclick = refreshPrinters;
   $('printer').onchange = updatePrintButtons;
   $('sides').onchange = () => { state.userSides = true; };
-  $('colour-correct').onchange = onColourCorrectChange;
+  $('cc-correction').onchange = () => onAdjust(true);
+  for (const k of SLIDERS) {
+    $('cc-' + k).oninput = () => onAdjust(false);
+    $('cc-' + k).onchange = () => onAdjust(true);
+  }
+  $('cc-reset').onclick = () => { showAdjustments({ correction: 'Gamma1', ...SLIDER_DEFAULTS }); onAdjust(true); };
+  $('cc-save').onclick = saveColour;
+  $('colour-box').classList.add('disabled');
   $('btn-preview').onclick = previewJob;
   $('btn-save').onclick = saveJob;
   $('btn-print').onclick = printJob;

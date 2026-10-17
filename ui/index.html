@@ -40,6 +40,23 @@
   </section>
 
   <aside id="panel">
+    <h2>Colour <span class="badge info">preview only</span></h2>
+    <div id="colour-box">
+      <label class="row">Colour Correct
+        <select id="cc-correction"></select>
+      </label>
+      <div class="adj-head"><span>Adjustments</span><button id="cc-reset" title="Reset sliders and Colour Correct to Hub's defaults (Gamma 1)">↻ Reset</button></div>
+      <div class="slider"><label for="cc-brightness">Brightness</label><input id="cc-brightness" type="range" min="-0.5" max="0.5" step="any" value="0"><output id="cc-brightness-v"></output></div>
+      <div class="slider"><label for="cc-contrast">Contrast</label><input id="cc-contrast" type="range" min="-15" max="15" step="any" value="0"><output id="cc-contrast-v"></output></div>
+      <div class="slider"><label for="cc-saturation">Saturation</label><input id="cc-saturation" type="range" min="-5" max="5" step="any" value="0"><output id="cc-saturation-v"></output></div>
+      <div class="slider"><label for="cc-red">Red</label><input id="cc-red" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-red-v"></output></div>
+      <div class="slider"><label for="cc-green">Green</label><input id="cc-green" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-green-v"></output></div>
+      <div class="slider"><label for="cc-blue">Blue</label><input id="cc-blue" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-blue-v"></output></div>
+      <label class="check"><input id="cc-autosave" type="checkbox" checked> Save into the .card file when I change something</label>
+      <div class="inline"><button id="cc-save">Save to .card</button><span id="cc-state" class="note"></span></div>
+      <div id="cc-note" class="note"></div>
+    </div>
+
     <h2>Print</h2>
 
     <label class="row">Printer
@@ -65,21 +82,7 @@
       <label class="check"><input id="oc-back" type="checkbox" checked> Back</label>
     </fieldset>
 
-    <fieldset>
-      <legend>Adjustments</legend>
-      <label class="row">Colour correct
-        <select id="colour-correct">
-          <option value="None">None</option>
-          <option value="Gamma 1">Gamma 1</option>
-          <option value="Gamma 2">Gamma 2</option>
-          <option value="Absolute Colorimetric">Absolute Colorimetric</option>
-          <option value="Relative Colorimetric">Relative Colorimetric</option>
-          <option value="Perceptual">Perceptual</option>
-          <option value="Saturation">Saturation</option>
-        </select>
-      </label>
-      <div class="note" id="colour-note">Stored in the .card file as <code>adjustments.correction</code> (same as Hub).</div>
-    </fieldset>
+    <label class="check" title="The driver cannot do Brightness/Contrast/Saturation/RGB or Gamma 1/2. Off: they only change the preview."><input id="bake" type="checkbox"> Also apply sliders + Gamma 1/2 to the printed bitmap</label>
 
     <details>
       <summary>Advanced: extra printer options</summary>

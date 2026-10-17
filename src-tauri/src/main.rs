@@ -8,19 +8,36 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::Engine;
+use carddeck_core::colour::{self, Adjustments, Correction};
 use carddeck_core::fonts::FontSet;
 use carddeck_core::print::*;
-use carddeck_core::{render_side, Card, RenderOptions};
+use carddeck_core::{render_side, Card, RenderOptions, Rendered};
 use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use tauri::Emitter;
 use tauri::{Manager, State};
 
-#[derive(Clone)]
 struct Loaded {
     card: Card,
     name: String,
     path: Option<String>,
+    /// Uncorrected renders; the preview colour correction is applied to these on demand.
+    front: Rendered,
+    back: Rendered,
+    /// Current (possibly unsaved) colour settings, and what the file has.
+    adj: Mutex<Adjustments>,
+    saved: Mutex<Adjustments>,
+}
+
+impl Loaded {
+    fn new(app: &tauri::AppHandle, state: &AppState, card: Card, name: String, path: Option<String>) -> Loaded {
+        let f = fonts(app, state);
+        let opts = RenderOptions::default();
+        let front = render_side(&card, false, &f, &opts);
+        let back = render_side(&card, true, &f, &opts);
+        let adj = card.adjustments;
+        Loaded { card, name, path, front, back, adj: Mutex::new(adj), saved: Mutex::new(adj) }
+    }
 }
 
 #[derive(Default)]
@@ -62,20 +79,88 @@ struct CardView {
     double_sided: bool,
     portrait: bool,
     dark_card: bool,
-    /// Hub `adjustments.correction` (Colour Correct), if present.
-    colour_correction: Option<String>,
     front: String,
     back: String,
     front_elements: usize,
     back_elements: usize,
     warnings: Vec<String>,
+    adjustments: AdjustmentsDto,
+    has_adjustments: bool,
+    /// False for the built-in calibration card (no file to save into).
+    can_save: bool,
+    corrections: Vec<CorrectionOption>,
 }
 
-fn view_of(app: &tauri::AppHandle, state: &AppState, loaded: &Loaded) -> CardView {
-    let f = fonts(app, state);
-    let opts = RenderOptions::default();
-    let front = render_side(&loaded.card, false, &f, &opts);
-    let back = render_side(&loaded.card, true, &f, &opts);
+/// Colour settings as the UI sees them (same JSON names as the `.card` file).
+#[derive(Serialize, Deserialize, Clone)]
+struct AdjustmentsDto {
+    correction: String,
+    brightness: f64,
+    contrast: f64,
+    saturation: f64,
+    red: f64,
+    green: f64,
+    blue: f64,
+}
+
+impl AdjustmentsDto {
+    fn from_core(a: &Adjustments) -> Self {
+        AdjustmentsDto {
+            correction: a.correction.json_name().to_string(),
+            brightness: a.brightness,
+            contrast: a.contrast,
+            saturation: a.saturation,
+            red: a.red,
+            green: a.green,
+            blue: a.blue,
+        }
+    }
+    fn to_core(&self) -> Adjustments {
+        Adjustments {
+            correction: Correction::from_json_name(&self.correction).unwrap_or(Correction::Gamma1),
+            brightness: self.brightness,
+            contrast: self.contrast,
+            saturation: self.saturation,
+            red: self.red,
+            green: self.green,
+            blue: self.blue,
+        }
+        .clamped()
+    }
+}
+
+#[derive(Serialize)]
+struct CorrectionOption {
+    id: &'static str,
+    label: &'static str,
+    /// PPD choice the printer gets for this mode.
+    driver_choice: &'static str,
+    /// False for Gamma 1/2: no driver equivalent, preview only.
+    driver_exact: bool,
+}
+
+fn correction_options() -> Vec<CorrectionOption> {
+    Correction::ALL
+        .iter()
+        .map(|c| CorrectionOption { id: c.json_name(), label: c.label(), driver_choice: c.ppd_choice(), driver_exact: c.has_driver_equivalent() })
+        .collect()
+}
+
+/// PNGs of both sides with the given colour settings applied (preview only).
+#[derive(Serialize)]
+struct Previews {
+    front: String,
+    back: String,
+}
+
+fn previews(loaded: &Loaded, adj: &Adjustments) -> Previews {
+    Previews { front: data_url(&loaded.front.to_corrected_png(adj)), back: data_url(&loaded.back.to_corrected_png(adj)) }
+}
+
+fn view_of(_app: &tauri::AppHandle, _state: &AppState, loaded: &Loaded) -> CardView {
+    let front = &loaded.front;
+    let back = &loaded.back;
+    let adj = *loaded.adj.lock().unwrap();
     let mut warnings: Vec<String> = Vec::new();
     for f in &loaded.card.about.features {
         warnings.push(format!("Card has \"{f}\" enabled. CardDeck does not handle it (no cut-out/overcoat holes)."));
@@ -101,9 +186,12 @@ fn view_of(app: &tauri::AppHandle, state: &AppState, loaded: &Loaded) -> CardVie
         double_sided: loaded.card.about.double_sided,
         portrait: loaded.card.about.portrait,
         dark_card: loaded.card.about.dark_card,
-        colour_correction: loaded.card.adjustments.correction.clone(),
-        front: data_url(&front.to_png()),
-        back: data_url(&back.to_png()),
+        front: data_url(&front.to_corrected_png(&adj)),
+        back: data_url(&back.to_corrected_png(&adj)),
+        adjustments: AdjustmentsDto::from_core(&adj),
+        has_adjustments: loaded.card.has_adjustments,
+        can_save: loaded.path.is_some(),
+        corrections: correction_options(),
         front_elements: loaded.card.front.elements.len(),
         back_elements: loaded.card.back.elements.len(),
         warnings,
@@ -118,29 +206,82 @@ async fn open_card(app: tauri::AppHandle, state: State<'_, AppState>, path: Stri
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
     let name = PathBuf::from(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.clone());
-    let loaded = Arc::new(Loaded { card, name, path: Some(path) });
-    *state.current.lock().unwrap() = Some(loaded.clone());
     let app2 = app.clone();
-    let view = tauri::async_runtime::spawn_blocking(move || {
+    let (loaded, view) = tauri::async_runtime::spawn_blocking(move || {
         let st = app2.state::<AppState>();
-        view_of(&app2, &st, &loaded)
+        let loaded = Arc::new(Loaded::new(&app2, &st, card, name, Some(path)));
+        let view = view_of(&app2, &st, &loaded);
+        (loaded, view)
     })
     .await
     .map_err(|e| e.to_string())?;
+    *state.current.lock().unwrap() = Some(loaded);
     Ok(view)
 }
 
 #[tauri::command]
 async fn open_calibration(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<CardView, String> {
-    let loaded = Arc::new(Loaded { card: carddeck_core::calibration::calibration_card(), name: "Calibration card".into(), path: None });
-    *state.current.lock().unwrap() = Some(loaded.clone());
     let app2 = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let (loaded, view) = tauri::async_runtime::spawn_blocking(move || {
         let st = app2.state::<AppState>();
-        view_of(&app2, &st, &loaded)
+        let loaded = Arc::new(Loaded::new(&app2, &st, carddeck_core::calibration::calibration_card(), "Calibration card".into(), None));
+        let view = view_of(&app2, &st, &loaded);
+        (loaded, view)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    *state.current.lock().unwrap() = Some(loaded);
+    Ok(view)
+}
+
+// ---- colour correction (preview only) -----------------------------------------------------------
+
+#[derive(Serialize)]
+struct AdjustResult {
+    previews: Previews,
+    /// True if the settings are now stored in the .card file.
+    saved: bool,
+    /// Settings differ from the file (and were not saved).
+    dirty: bool,
+}
+
+fn adjust_result(loaded: &Loaded, saved: bool) -> AdjustResult {
+    let adj = *loaded.adj.lock().unwrap();
+    let on_disk = *loaded.saved.lock().unwrap();
+    AdjustResult { previews: previews(loaded, &adj), saved, dirty: adj != on_disk }
+}
+
+fn write_to_file(loaded: &Loaded) -> Result<(), String> {
+    let path = loaded.path.as_ref().ok_or("This card has no file to save into")?;
+    let adj = *loaded.adj.lock().unwrap();
+    colour::store::save_adjustments(std::path::Path::new(path), &adj).map_err(|e| e.to_string())?;
+    *loaded.saved.lock().unwrap() = adj;
+    Ok(())
+}
+
+/// Changes the colour settings; re-renders the preview from the cached uncorrected render. With
+/// `save`, the `adjustments` block of the .card file is updated too (nothing else in the file changes).
+#[tauri::command]
+async fn set_adjustments(state: State<'_, AppState>, adj: AdjustmentsDto, save: bool) -> Result<AdjustResult, String> {
+    let loaded = current(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        *loaded.adj.lock().unwrap() = adj.to_core();
+        let mut saved = false;
+        if save && loaded.path.is_some() {
+            write_to_file(&loaded)?;
+            saved = true;
+        }
+        Ok(adjust_result(&loaded, saved))
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// "Save" button: writes the current colour settings into the .card file.
+#[tauri::command]
+async fn save_adjustments(state: State<'_, AppState>) -> Result<(), String> {
+    let loaded = current(&state)?;
+    tauri::async_runtime::spawn_blocking(move || write_to_file(&loaded)).await.map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -158,8 +299,8 @@ struct JobOpts {
     copies: u32,
     overcoat_front: bool,
     overcoat_back: bool,
-    /// Hub Colour Correct label (e.g. `"Saturation"`). Mapped to PPD `ColourCorrection`.
-    colour_correction: Option<String>,
+    /// Also bake the sliders and Gamma 1/2 into the print bitmap (the driver cannot do them). Default off.
+    bake_adjustments: bool,
     /// `NAME=VALUE` lines
     extra: Vec<String>,
 }
@@ -172,7 +313,7 @@ impl Default for JobOpts {
             copies: 1,
             overcoat_front: true,
             overcoat_back: true,
-            colour_correction: None,
+            bake_adjustments: false,
             extra: Vec::new(),
         }
     }
@@ -190,11 +331,6 @@ impl JobOpts {
             copies: self.copies.clamp(1, 99),
             overcoat_front: self.overcoat_front,
             overcoat_back: self.overcoat_back,
-            colour_correction: self
-                .colour_correction
-                .clone()
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty()),
             // Orientation / black / photo-nudge stay on the sensible defaults in PrintOptions.
             ..PrintOptions::default()
         };
@@ -247,31 +383,12 @@ fn build(app: &tauri::AppHandle, state: &AppState, opts: &JobOpts) -> Result<(Jo
     let loaded = current(state)?;
     let f = fonts(app, state);
     let mut o = opts.to_options();
-    // Prefer the value stored on the open card when the UI did not send one.
-    if o.colour_correction.is_none() {
-        o.colour_correction = loaded.card.adjustments.correction.clone();
-    }
+    // The driver does the colour correction: send the matching PPD option, never pre-correct the bitmap
+    // (except the opt-in bake of what the driver cannot do).
+    let adj = *loaded.adj.lock().unwrap();
+    o.use_colour(&adj, opts.bake_adjustments);
     let job = build_job(&loaded.card, &f, &o).map_err(|e| e.to_string())?;
     Ok((job, o))
-}
-
-#[tauri::command]
-fn set_colour_correction(state: State<'_, AppState>, correction: String) -> Result<(), String> {
-    let correction = correction.trim().to_string();
-    if correction.is_empty() {
-        return Err("Colour correct value is empty".into());
-    }
-    let mut guard = state.current.lock().unwrap();
-    let Some(loaded) = guard.as_mut() else {
-        return Err("Open a .card file first".into());
-    };
-    let mut next = (**loaded).clone();
-    next.card.adjustments.correction = Some(correction.clone());
-    if let Some(path) = &next.path {
-        Card::write_colour_correction(std::path::Path::new(path), &correction).map_err(|e| e.to_string())?;
-    }
-    *loaded = Arc::new(next);
-    Ok(())
 }
 
 #[tauri::command]
@@ -289,8 +406,7 @@ async fn preview_job(app: tauri::AppHandle, opts: JobOpts) -> Result<JobPreview,
                 PagePreview { label: p.label.to_string(), png: data_url(&png) }
             })
             .collect();
-        let ppd = o.printer.as_deref().and_then(|p| load_ppd(p).ok());
-        let command = lp_command_line_with_ppd(std::path::Path::new("<job.pdf>"), &o, ppd.as_ref());
+        let command = lp_command_line(std::path::Path::new("<job.pdf>"), &o);
         Ok(JobPreview { pages, command, warnings: job.warnings.clone(), problems: ppd_problems(&o) })
     })
     .await
@@ -326,9 +442,8 @@ async fn print_job(app: tauri::AppHandle, opts: JobOpts) -> Result<String, Strin
         }
         let dir = std::env::temp_dir().join(format!("carddeck-{}", std::process::id()));
         let files = carddeck_core::print::save_job(&dir, &job, &o).map_err(|e| e.to_string())?;
-        let ppd = o.printer.as_deref().and_then(|p| load_ppd(p).ok());
         let out = Command::new("lp")
-            .args(lp_args_with_ppd(&files[0], &o, ppd.as_ref()))
+            .args(lp_args(&files[0], &o))
             .output()
             .map_err(|e| format!("Could not run lp: {e}"))?;
         if out.status.success() {
@@ -382,16 +497,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![
-            open_card,
-            open_calibration,
-            take_pending_open,
-            set_colour_correction,
-            preview_job,
-            save_job,
-            print_job,
-            list_printers
-        ])
+        .invoke_handler(tauri::generate_handler![open_card, open_calibration, take_pending_open, preview_job, save_job, print_job, list_printers, set_adjustments, save_adjustments])
         .build(tauri::generate_context!())
         .expect("error while building CardDeck");
     app.run(|handle, event| {

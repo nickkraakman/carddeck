@@ -65,3 +65,12 @@ code { background: #30343c; padding: 1px 5px; border-radius: 4px; }
 .print-preview h3 { margin: 0 0 4px; font-size: 13px; }
 .print-preview .pages { display: flex; gap: 22px; align-items: flex-start; margin-top: 10px; }
 .print-preview img { display: block; height: 380px; width: auto; box-shadow: 0 4px 18px rgba(0,0,0,.5); background: white; }
+.badge.info { background: #3b4a66; color: #cfe0ff; }
+#colour-box { margin: 0 0 16px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.adj-head { display: flex; justify-content: space-between; align-items: center; color: var(--muted); margin: 4px 0 6px; }
+.adj-head button { padding: 2px 8px; }
+.slider { display: grid; grid-template-columns: 78px 1fr 44px; align-items: center; gap: 6px; margin: 0 0 6px; color: var(--muted); }
+.slider input[type=range] { padding: 0; background: transparent; border: 0; width: 100%; }
+.slider output { text-align: right; font-variant-numeric: tabular-nums; font-size: 11px; }
+#colour-box.disabled { opacity: .45; pointer-events: none; }
+#cc-state.ok { color: #8ee2a0; } #cc-state.dirty { color: var(--warn); }

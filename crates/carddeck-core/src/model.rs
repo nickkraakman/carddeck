@@ -6,29 +6,18 @@
 
 use serde_json::{Map, Value};
 
+use crate::colour::Adjustments;
 use crate::Error;
 
 #[derive(Debug, Clone)]
 pub struct Card {
     pub about: About,
-    /// Hub print adjustments (`adjustments` in the JSON). Colour correct is remembered per file.
-    pub adjustments: Adjustments,
     pub front: Side,
     pub back: Side,
-}
-
-/// Hub `adjustments` block. Colour correct maps to the Magicard PPD `ColourCorrection` option;
-/// brightness / contrast / RGB multipliers are stored but not applied by CardDeck yet.
-#[derive(Debug, Clone, Default)]
-pub struct Adjustments {
-    /// Hub label, e.g. `"Saturation"`, `"Gamma 2"`, `"Relative Colorimetric"`, `"None"`.
-    pub correction: Option<String>,
-    pub brightness: f64,
-    pub contrast: f64,
-    pub saturation: f64,
-    pub red: f64,
-    pub green: f64,
-    pub blue: f64,
+    /// The file's `adjustments` block (Hub's colour correction + sliders), or Hub's default when absent.
+    pub adjustments: Adjustments,
+    /// Whether the file had an `adjustments` block at all.
+    pub has_adjustments: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -136,30 +125,13 @@ impl Card {
         let about = parse_about(obj.get("about"))?;
         let default_w = if about.portrait { about.height_px } else { about.width_px };
         let default_h = if about.portrait { about.width_px } else { about.height_px };
-        let adjustments = parse_adjustments(obj.get("adjustments"));
         let front = parse_side(obj.get("front"), default_w, default_h)
             .map_err(|e| Error::Parse(format!("front: {e}")))?;
         let back = parse_side(obj.get("back"), default_w, default_h)
             .map_err(|e| Error::Parse(format!("back: {e}")))?;
-        Ok(Card { about, adjustments, front, back })
-    }
-
-    /// Updates `adjustments.correction` in the JSON file (creates the block if missing).
-    /// Other adjustment fields are left untouched.
-    pub fn write_colour_correction(path: &std::path::Path, correction: &str) -> Result<(), Error> {
-        let bytes = std::fs::read(path).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
-        let mut root: Value = serde_json::from_slice(&bytes).map_err(|e| Error::Parse(e.to_string()))?;
-        let obj = root
-            .as_object_mut()
-            .ok_or_else(|| Error::Parse("top level is not a JSON object".into()))?;
-        let adj = obj.entry("adjustments".to_string()).or_insert_with(|| Value::Object(Map::new()));
-        let adj = adj
-            .as_object_mut()
-            .ok_or_else(|| Error::Parse("`adjustments` is not an object".into()))?;
-        adj.insert("correction".into(), Value::String(correction.to_string()));
-        let out = serde_json::to_vec_pretty(&root).map_err(|e| Error::Io(e.to_string()))?;
-        std::fs::write(path, out).map_err(|e| Error::Io(format!("{}: {e}", path.display())))?;
-        Ok(())
+        let has_adjustments = obj.get("adjustments").map(|v| v.is_object()).unwrap_or(false);
+        let adjustments = Adjustments::from_json(obj.get("adjustments"));
+        Ok(Card { about, front, back, adjustments, has_adjustments })
     }
 
     pub fn from_file(path: &std::path::Path) -> Result<Card, Error> {
@@ -186,32 +158,6 @@ impl Card {
         } else {
             (self.about.width_px, self.about.height_px)
         }
-    }
-}
-
-fn parse_adjustments(v: Option<&Value>) -> Adjustments {
-    let Some(o) = v.and_then(|v| v.as_object()) else {
-        return Adjustments::default();
-    };
-    let num = |k: &str, d: f64| -> f64 {
-        match o.get(k) {
-            Some(Value::Number(n)) => n.as_f64().unwrap_or(d),
-            Some(Value::String(s)) => s.parse().unwrap_or(d),
-            _ => d,
-        }
-    };
-    Adjustments {
-        correction: o
-            .get("correction")
-            .and_then(|v| v.as_str())
-            .map(|s| s.trim().to_string())
-            .filter(|s| !s.is_empty()),
-        brightness: num("brightness", 0.0),
-        contrast: num("contrast", 0.0),
-        saturation: num("saturation", 0.0),
-        red: num("red", 1.0),
-        green: num("green", 1.0),
-        blue: num("blue", 1.0),
     }
 }
 

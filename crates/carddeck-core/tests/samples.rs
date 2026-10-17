@@ -268,3 +268,34 @@ fn rendered_qr_codes_scan() {
 fn pixmap_rgba(r: &carddeck_core::Rendered) -> image::RgbaImage {
     carddeck_core::render::pixmap_to_rgba(&r.pixmap)
 }
+
+/// Real Hub files: the `adjustments` block is read, and saving a changed block into a copy changes
+/// nothing else (byte for byte before the block, parsed JSON equal elsewhere).
+#[test]
+fn adjustments_roundtrip_on_real_files() {
+    use carddeck_core::colour::{store, Adjustments, Correction};
+    let files = card_files();
+    if files.is_empty() {
+        eprintln!("SKIP adjustments_roundtrip_on_real_files: no samples in {}", samples_dir().display());
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for f in files {
+        let card = Card::from_file(&f).unwrap();
+        let original = std::fs::read_to_string(&f).unwrap();
+        let copy = dir.path().join(f.file_name().unwrap());
+        std::fs::write(&copy, &original).unwrap();
+        // Saving the values we just read must reproduce Hub's file byte for byte.
+        store::save_adjustments(&copy, &card.adjustments).unwrap();
+        assert_eq!(std::fs::read_to_string(&copy).unwrap(), original, "{}: no-op save changed the file", f.display());
+        // A real change touches only the block.
+        let adj = Adjustments { correction: Correction::Perceptual, brightness: 0.1, red: 1.25, ..card.adjustments };
+        store::save_adjustments(&copy, &adj).unwrap();
+        let saved = std::fs::read_to_string(&copy).unwrap();
+        if let Some(i) = original.find("\"adjustments\"") {
+            assert_eq!(&saved[..i], &original[..i], "{}", f.display());
+        }
+        assert_eq!(Card::from_file(&copy).unwrap().adjustments, adj);
+        eprintln!("{}: saved correction {:?} -> Perceptual", f.file_name().unwrap().to_string_lossy(), card.adjustments.correction);
+    }
+}

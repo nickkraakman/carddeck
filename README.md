@@ -97,9 +97,31 @@ You can also drop extra font files in `~/Library/Application Support/dev.carddec
    - Choose the Magicard **Printer** (↻ to refresh).
    - Set **Sides** and **Copies**.
    - Leave **Overcoat** on unless you intentionally want it off.
-   - Set **Colour correct** — CardDeck loads this from the file’s `adjustments.correction` (same field Hub stores). Changing it writes back into that `.card` file.
+   - Colour is set in the **Colour (preview only)** panel above Print (see below). The chosen Colour Correct mode is sent to the printer as the matching `ColourCorrection` option.
 5. Optional: **Preview print pages** to see the 638×1013 portrait rasters the driver receives, or **Save job (PDF + PNG)…** for a dry run with no printer.
 6. Click **Print…** and confirm. That sends `lp` with the Magicard PPD options (uses a blank card + ribbon).
+
+### Colour correction
+
+The **Colour (preview only)** panel has Hub's **Colour Correct** drop-down (None, Gamma 1, Gamma 2, Absolute / Relative
+Colorimetric, Perceptual, Saturation) and the Brightness / Contrast / Saturation / Red / Green / Blue sliders. They start
+from the card's saved `adjustments`; **Reset** returns to Hub's defaults (Gamma 1, sliders neutral). Changes show in the
+on-screen preview immediately and are saved into the `.card` file's `adjustments` block (untick auto-save to use **Save to .card** instead).
+
+**The printed bitmap is never pre-corrected** (that would correct twice). The Colour Correct mode goes to the driver as a PPD option:
+
+| Colour Correct | `lp` option |
+|---|---|
+| None | `ColourCorrection=0ColourCorrection` |
+| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed, closest driver option, not identical) |
+| Perceptual | `ColourCorrection=2ColourCorrection` |
+| Saturation | `ColourCorrection=3ColourCorrection` |
+| Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
+| Absolute Colorimetric | `ColourCorrection=5ColourCorrection` |
+
+The sliders have no driver equivalent, so they are preview only unless you tick **Also apply sliders + Gamma 1/2 to the printed bitmap**
+(then Gamma/sliders are baked into the bitmap and the driver gets `0ColourCorrection`). Details, fit method and error numbers:
+[docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md). CLI: `carddeck adjust my.card --correction Perceptual --saturation 1`.
 
 First hardware run: use **Calibration card** and the checklist in [docs/TEST-PRINT.md](docs/TEST-PRINT.md).
 
@@ -109,15 +131,16 @@ Get Info on a `.card` → Open with → CardDeck → **Change All…**. After th
 
 ## What CardDeck does (and does not)
 
-* **Does:** view `.card` front/back at 300 dpi CR80, build duplex print jobs, talk to the official Magicard CUPS driver, honour Hub’s stored **Colour correct** setting.
-* **Does not (yet):** designer, CSV/variables, HoloKote, mag stripe, chip/HoloPatch holes, brightness/contrast/RGB sliders from Hub’s Adjustments panel (those numbers are in the file but not applied).
+* **Does:** view `.card` front/back at 300 dpi CR80, build duplex print jobs, talk to the official Magicard CUPS driver, preview and edit Hub’s **Colour Correct** and Brightness/Contrast/Saturation/RGB adjustments (saved back to the file), and send the matching `ColourCorrection` option to the driver.
+* **Does not (yet):** designer, CSV/variables, HoloKote, mag stripe, chip/HoloPatch holes, Hub’s sharpen filter.
 
 ```
 crates/carddeck-core   parser, renderer, print job, CUPS parsing
 crates/carddeck-cli    headless CLI: info / render / job / calibrate / print / printers
 src-tauri              Tauri v2 desktop shell
 ui/                    plain HTML/JS/CSS (no npm)
-docs/                  test-print procedure
+docs/                  test-print procedure, colour-correction notes
+tools/                 gen-lut.py (colour table repack), colour-fit/ (how Gamma 1/2 were fitted)
 ```
 
 ## Build from source
@@ -140,10 +163,10 @@ cargo tauri build --target x86_64-apple-darwin --bundles app,dmg   # Intel build
 * Unsigned / not notarized — see Gatekeeper steps above.
 * Raster page orientation defaults are derived from the public driver; calibrate once on real hardware ([docs/TEST-PRINT.md](docs/TEST-PRINT.md)).
 * Font substitutes change text metrics vs Hub unless Myriad Pro / Minion Pro are installed.
-* Hub brightness / contrast / saturation / RGB multipliers in `adjustments` are not applied; only **Colour correct** is sent to the driver (`ColourCorrection` PPD option).
+* Colour: the preview of Perceptual / Saturation / Relative / Absolute is exact (the driver’s own table); **Gamma 1/2 are fitted approximations** of Hub, and print as the driver’s closest option (Driver managed). The sliders are preview only (optional bake into the print bitmap). Hub’s sharpen is not reproduced. See [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
 * Not handled: variable data, barcode regeneration, HoloKote / HoloPatch / mag / chip cut-outs, dark-card specifics, non-CR80 page sizes for printing.
 
 ## Legal / provenance
 
 Clean-room: renderer and print code from observed `.card` behaviour and public Magicard driver option names.
-No Hub code, assets, or sample cards are in this repository. The Magicard driver is GPL and is only *used* via CUPS.
+No Hub code, assets, or sample cards are in this repository. The Magicard driver is GPL and is only *used* via CUPS, **except** the colour table for the Perceptual / Saturation / Relative / Absolute preview, which is taken from the GPL Linux driver and makes the built app GPL-2.0-or-later. See [LICENSE-GPL-NOTES.md](LICENSE-GPL-NOTES.md) (the repository has no `LICENSE` file yet; GPL-2.0-or-later is recommended).

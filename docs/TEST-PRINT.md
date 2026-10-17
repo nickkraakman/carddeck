@@ -48,3 +48,24 @@ altered pure black. Report it, and try **Black = Composite** or **Mono K** for b
 
 Which table row applied for front and back, whether Stretch/Crop mattered, the black check result, the printer model as shown in
 `lpstat -p`, and the queue's PPD option list (`lpoptions -p <queue> -l`).
+
+## Colour check (optional, 1 card each)
+
+The colour mode goes to the driver as the PPD option `ColourCorrection`; the bitmap is not corrected. Mapping:
+
+| CardDeck Colour Correct | `lp` option |
+|---|---|
+| None | `ColourCorrection=0ColourCorrection` |
+| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed: closest, not identical) |
+| Perceptual | `ColourCorrection=2ColourCorrection` |
+| Saturation | `ColourCorrection=3ColourCorrection` |
+| Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
+| Absolute Colorimetric | `ColourCorrection=5ColourCorrection` |
+
+1. Check the queue has the choices: `lpoptions -p <queue> -l | grep ColourCorrection` (expect `0ColourCorrection` to `5ColourCorrection`).
+2. Print the same card with **None** and with **Absolute Colorimetric**. White should look slightly warm/off-white and
+   greens clearly more saturated in the second; the app's preview of Absolute should look like that print.
+3. Gamma 1/2: the printer gets Driver managed, so the print will not match the (darker) preview exactly. Tick
+   *Also apply sliders + Gamma 1/2 to the printed bitmap* to print the preview's curve instead (driver gets `0ColourCorrection`).
+4. Sliders (Brightness ... Blue) are preview only unless that box is ticked.
+5. The exact command (with `-o ColourCorrection=...`) is in the print preview and in `command.txt` of a saved job.

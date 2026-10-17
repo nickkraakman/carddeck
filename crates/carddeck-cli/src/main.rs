@@ -13,6 +13,7 @@ USAGE:
   carddeck render <file.card> <outdir> [--scale 1.0]
   carddeck job <file.card> <outdir> [options]      dry run: writes job.pdf, page PNGs, command.txt
   carddeck print <file.card> -d <printer> [options] build the job and send it with lp
+  carddeck calibrate <outdir> [options]             dry-run job for the built-in calibration card
   carddeck printers                                 list CUPS queues (lpstat -p)
 
 JOB/PRINT OPTIONS:
@@ -160,6 +161,16 @@ fn run(args: &[String]) -> Result<(), String> {
             } else {
                 Err(format!("lp failed: {status}"))
             }
+        }
+        Some("calibrate") if args.len() >= 2 => {
+            // Same options as `job`, but for the built-in calibration card.
+            let card = carddeck_core::calibration::calibration_card();
+            let o = parse_opts(&args[2..], &card)?;
+            let job = build_job(&card, &FontSet::system(), &o).map_err(|e| e.to_string())?;
+            for f in save_job(&PathBuf::from(&args[1]), &job, &o).map_err(|e| e.to_string())? {
+                println!("{}", f.display());
+            }
+            Ok(())
         }
         Some("printers") => {
             let out = std::process::Command::new("lpstat").arg("-p").output().map_err(|e| format!("could not run lpstat: {e}"))?;

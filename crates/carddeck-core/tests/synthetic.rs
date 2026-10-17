@@ -381,3 +381,14 @@ fn portrait_design_is_turned_like_hub() {
     // portrait top-left --CCW--> landscape bottom-left --CCW--> page bottom-right
     assert_eq!(px(p, PAGE_W - 10, PAGE_H - 10), [255, 0, 0]);
 }
+
+#[test]
+fn calibration_card_renders_and_prints() {
+    let card = carddeck_core::calibration::calibration_card();
+    let job = build_job(&card, &fonts(), &PrintOptions::default()).unwrap();
+    assert_eq!(job.pages.len(), 2);
+    let r = render_side(&card, false, &fonts(), &RenderOptions::default());
+    let rgb = r.to_rgb_over_white();
+    assert_eq!(px(&rgb, 60, 60), [255, 0, 0]);
+    assert_eq!(px(&rgb, 60, 580), [0, 0, 0], "bottom-left marker is pure black");
+}

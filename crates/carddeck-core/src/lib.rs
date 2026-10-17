@@ -1,4 +1,5 @@
 //! CardDeck core: `.card` parsing, rendering and print-job building.
+pub mod calibration;
 pub mod fonts;
 pub mod model;
 pub mod print;

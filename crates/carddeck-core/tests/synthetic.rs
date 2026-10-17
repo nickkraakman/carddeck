@@ -1,7 +1,5 @@
 //! Tests on synthetic cards (no private samples needed).
 
-use std::collections::BTreeMap;
-
 use base64::Engine;
 use carddeck_core::fonts::FontSet;
 use carddeck_core::print::*;
@@ -326,43 +324,6 @@ fn lp_command_snapshot() {
     assert!(cmd.contains("CFOverCoat=0PrintNoOvercoat"));
     assert!(cmd.contains("CFRotation=1Rotation"));
     assert!(cmd.ends_with("'/tmp/a b.pdf'"));
-}
-
-#[test]
-fn colour_correction_maps_hub_labels_to_ppd() {
-    assert_eq!(resolve_colour_correction("Saturation", None).as_deref(), Some("3ColourCorrection"));
-    assert_eq!(resolve_colour_correction("Gamma 2", None).as_deref(), Some("1ColourCorrection"));
-    assert_eq!(resolve_colour_correction("Relative Colorimetric", None).as_deref(), Some("4ColourCorrection"));
-    assert_eq!(resolve_colour_correction("None", None).as_deref(), Some("0ColourCorrection"));
-
-    let o = PrintOptions {
-        printer: Some("Magicard_300".into()),
-        colour_correction: Some("Saturation".into()),
-        ..Default::default()
-    };
-    let cmd = lp_command_line(std::path::Path::new("/tmp/job.pdf"), &o);
-    assert!(cmd.contains("ColourCorrection=3ColourCorrection"), "{cmd}");
-
-    // Live PPD choice list (tokens only, as lpoptions -l prints them).
-    let mut ppd = BTreeMap::new();
-    ppd.insert(
-        "ColourCorrection".into(),
-        PpdOption {
-            choices: vec![
-                "0ColourCorrection".into(),
-                "1ColourCorrection".into(),
-                "2ColourCorrection".into(),
-                "3ColourCorrection".into(),
-                "4ColourCorrection".into(),
-                "5ColourCorrection".into(),
-            ],
-            default: Some("5ColourCorrection".into()),
-        },
-    );
-    assert_eq!(
-        resolve_colour_correction("Absolute Colorimetric", Some(&ppd)).as_deref(),
-        Some("5ColourCorrection")
-    );
 }
 
 #[test]

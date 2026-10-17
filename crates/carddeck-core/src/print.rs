@@ -15,6 +15,7 @@ pub use image::{ImageFormat, RgbImage};
 use image::imageops;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
+use crate::colour::{self, Adjustments, Correction, Stages};
 use crate::fonts::FontSet;
 use crate::render::{render_side, RenderOptions};
 use crate::{Card, Error};
@@ -84,10 +85,27 @@ pub struct PrintOptions {
     pub black: BlackMode,
     /// Photo black nudged to (1,1,1) so photos never use resin.
     pub prevent_resin_for_images: bool,
-    /// Hub `adjustments.correction` label (e.g. `"Saturation"`). Mapped to PPD `ColourCorrection`.
-    pub colour_correction: Option<String>,
     /// Extra raw `-o name=value` pairs (advanced: e.g. `CFRotation=1Rotation`).
     pub extra_options: Vec<(String, String)>,
+    /// Colour correction chosen for the card. It is sent to the driver as the matching PPD option
+    /// `ColourCorrection` (see [`Correction::ppd_choice`]); the print bitmap itself is NOT corrected,
+    /// so the driver is the only one doing it (no double correction). `None` = send no option.
+    pub colour_correction: Option<Correction>,
+    /// The card's current colour settings (sliders + mode), used for warnings and the optional bake.
+    pub adjustments: Option<Adjustments>,
+    /// Opt-in: bake the parts the driver cannot do (Brightness/Contrast/Saturation/RGB sliders and
+    /// Gamma 1/2) into the print bitmap. LUT modes are never baked. Default off.
+    pub bake_adjustments: bool,
+}
+
+impl PrintOptions {
+    /// Takes the colour settings of the card: sends the matching driver option, and (if `bake`) also
+    /// bakes the non-driver parts into the bitmap.
+    pub fn use_colour(&mut self, adj: &Adjustments, bake: bool) {
+        self.colour_correction = Some(adj.correction);
+        self.adjustments = Some(*adj);
+        self.bake_adjustments = bake;
+    }
 }
 
 impl Default for PrintOptions {
@@ -104,100 +122,11 @@ impl Default for PrintOptions {
             overcoat_back: true,
             black: BlackMode::ResinK,
             prevent_resin_for_images: true,
-            colour_correction: None,
             extra_options: Vec::new(),
+            colour_correction: None,
+            adjustments: None,
+            bake_adjustments: false,
         }
-    }
-}
-
-/// Hub Colour Correct labels shown in Magicard Hub (and stored in `.card` as `adjustments.correction`).
-pub const HUB_COLOUR_CORRECTIONS: &[&str] = &[
-    "None",
-    "Gamma 1",
-    "Gamma 2",
-    "Absolute Colorimetric",
-    "Relative Colorimetric",
-    "Perceptual",
-    "Saturation",
-];
-
-fn norm_label(s: &str) -> String {
-    s.chars()
-        .filter(|c| c.is_ascii_alphanumeric())
-        .flat_map(|c| c.to_lowercase())
-        .collect()
-}
-
-/// Maps a Hub colour-correct label to a PPD `ColourCorrection` choice value.
-///
-/// Prefers matching against the live printer's choice labels when `ppd` is provided; otherwise uses
-/// the Pro 300 / modern Magicard macOS driver numbering (None=0, Driver managed=1, Perceptual=2,
-/// Saturation=3, Relative=4, Absolute=5). Gamma 1/2 map to "Driver managed" on that PPD.
-pub fn resolve_colour_correction(hub_label: &str, ppd: Option<&BTreeMap<String, PpdOption>>) -> Option<String> {
-    let want = norm_label(hub_label);
-    if want.is_empty() {
-        return None;
-    }
-    if let Some(ppd) = ppd {
-        if let Some(opt) = ppd.get("ColourCorrection") {
-            // Aliases from Hub names onto typical PPD labels.
-            let aliases: &[&str] = match want.as_str() {
-                "none" => &["none"],
-                "gamma1" => &["gamma1", "drivermanaged", "fordarkimages", "normal"],
-                "gamma2" => &["gamma2", "forlightimages", "drivermanaged"],
-                "absolutecolorimetric" | "absolutecolourimetric" => &["absolutecolorimetric", "absolutecolourimetric"],
-                "relativecolorimetric" | "relativecolourimetric" => &["relativecolorimetric", "relativecolourimetric"],
-                "perceptual" => &["perceptual"],
-                "saturation" => &["saturation"],
-                "drivermanaged" => &["drivermanaged"],
-                other => {
-                    // Fall through: try exact/substring match on `other` itself.
-                    let _ = other;
-                    &[]
-                }
-            };
-            for choice in &opt.choices {
-                let label = choice_label_from_ppd_token(choice);
-                let n = norm_label(&label);
-                if n == want || aliases.iter().any(|a| n == *a) || n.contains(&want) || want.contains(&n) {
-                    return Some(choice.clone());
-                }
-            }
-            // Second pass: alias-only against labels when Hub name itself is not a PPD label.
-            for alias in aliases {
-                for choice in &opt.choices {
-                    if norm_label(&choice_label_from_ppd_token(choice)) == *alias {
-                        return Some(choice.clone());
-                    }
-                }
-            }
-        }
-    }
-    // Static Pro 300-style fallback (matches official macOS 1.5.0 `pro300.ppd`).
-    let value = match want.as_str() {
-        "none" => "0ColourCorrection",
-        "gamma1" | "gamma2" | "drivermanaged" => "1ColourCorrection",
-        "perceptual" => "2ColourCorrection",
-        "saturation" => "3ColourCorrection",
-        "relativecolorimetric" | "relativecolourimetric" => "4ColourCorrection",
-        "absolutecolorimetric" | "absolutecolourimetric" => "5ColourCorrection",
-        _ => return None,
-    };
-    Some(value.into())
-}
-
-/// `lpoptions -l` prints choice tokens like `3ColourCorrection`; the human label is not included.
-/// PPD files use `3ColourCorrection/Saturation`. When we only have the token, derive a guess from
-/// known Pro 300 numbering, else return the raw token.
-fn choice_label_from_ppd_token(choice: &str) -> String {
-    match choice {
-        "0ColourCorrection" => "None".into(),
-        "1ColourCorrection" => "Driver managed".into(),
-        "2ColourCorrection" => "Perceptual".into(),
-        "3ColourCorrection" => "Saturation".into(),
-        "4ColourCorrection" => "Relative colorimetric".into(),
-        "5ColourCorrection" => "Absolute colorimetric".into(),
-        other => other.to_string(),
     }
 }
 
@@ -256,10 +185,18 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
     let want_front = matches!(o.sides, Sides::Front | Sides::Both);
     let want_back = matches!(o.sides, Sides::Back | Sides::Both);
     let mut singles: Vec<JobPage> = Vec::new();
+    warnings.extend(colour_warnings(o));
+    let bake = |rgb: &mut RgbImage| {
+        if let (true, Some(adj)) = (o.bake_adjustments, &o.adjustments) {
+            colour::apply_to_buffer(rgb.as_mut(), 3, adj, Stages::NonDriver);
+        }
+    };
     if want_front {
         let r = render_side(card, false, fonts, &ropts);
         warnings.extend(r.warnings.iter().map(|w| format!("front: {w}")));
-        singles.push(JobPage { label: "front", rgb: to_page(card, &r.to_rgb_over_white(), false, o) });
+        let mut rgb = r.to_rgb_over_white();
+        bake(&mut rgb);
+        singles.push(JobPage { label: "front", rgb: to_page(card, &rgb, false, o) });
     }
     if want_back {
         if !card.about.double_sided && o.sides == Sides::Both {
@@ -267,7 +204,9 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
         }
         let r = render_side(card, true, fonts, &ropts);
         warnings.extend(r.warnings.iter().map(|w| format!("back: {w}")));
-        singles.push(JobPage { label: "back", rgb: to_page(card, &r.to_rgb_over_white(), true, o) });
+        let mut rgb = r.to_rgb_over_white();
+        bake(&mut rgb);
+        singles.push(JobPage { label: "back", rgb: to_page(card, &rgb, true, o) });
     }
     if singles.is_empty() {
         return Err(Error::Print("nothing to print".into()));
@@ -283,6 +222,31 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
     warnings.sort();
     warnings.dedup();
     Ok(Job { pages, warnings })
+}
+
+/// Explains what the printer will and will not do about colour for these options.
+fn colour_warnings(o: &PrintOptions) -> Vec<String> {
+    let mut w = Vec::new();
+    let Some(c) = o.colour_correction else { return w };
+    let baked = o.bake_adjustments;
+    if matches!(c, Correction::Gamma1 | Correction::Gamma2) {
+        if baked {
+            w.push(format!("{} has no driver option: it is baked into the print bitmap and the driver gets ColourCorrection=None (no double correction).", c.label()));
+        } else {
+            w.push(format!(
+                "{} has no exact Magicard driver option: the printer gets the closest one, ColourCorrection=Driver managed, so the print will not match the on-screen preview exactly. Tick \"apply to the printed bitmap\" to print the preview's curve instead.",
+                c.label()
+            ));
+        }
+    }
+    if o.adjustments.map(|a| !a.sliders_neutral()).unwrap_or(false) {
+        if baked {
+            w.push("Brightness/Contrast/Saturation/RGB sliders are baked into the print bitmap; pure black text may no longer be exactly #000000 (resin).".into());
+        } else {
+            w.push("Brightness/Contrast/Saturation/RGB sliders are preview only: the driver has no such options and the print bitmap is not changed.".into());
+        }
+    }
+    w
 }
 
 /// Lossless PDF: one page per bitmap, page size 153 x 243 pt, image filling the page, DeviceRGB, no interpolation.
@@ -326,14 +290,7 @@ pub fn write_pdf(job: &Job) -> Vec<u8> {
 }
 
 /// PPD options for `lp`, in a stable order. Names come from the Magicard PPDs.
-///
-/// When `ppd` is `Some`, `colour_correction` is resolved against the live choice list; otherwise the
-/// Pro 300 static map is used.
 pub fn ppd_options(o: &PrintOptions) -> Vec<(String, String)> {
-    ppd_options_with_ppd(o, None)
-}
-
-pub fn ppd_options_with_ppd(o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdOption>>) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = vec![
         ("PageSize".into(), "1XCR80".into()),
         ("UTDuplex".into(), o.sides.ppd().into()),
@@ -349,10 +306,9 @@ pub fn ppd_options_with_ppd(o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdO
     }
     v.push(("CFOverCoat".into(), if o.overcoat_front { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
     v.push(("CBOverCoat".into(), if o.overcoat_back { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
-    if let Some(label) = o.colour_correction.as_deref().filter(|s| !s.is_empty()) {
-        if let Some(val) = resolve_colour_correction(label, ppd) {
-            v.push(("ColourCorrection".into(), val));
-        }
+    if let Some(c) = o.colour_correction {
+        let choice = if o.bake_adjustments && o.adjustments.is_some() { c.ppd_choice_when_baked() } else { c.ppd_choice() };
+        v.push(("ColourCorrection".into(), choice.into()));
     }
     v.push(("print-scaling".into(), "none".into()));
     for (k, val) in &o.extra_options {
@@ -367,10 +323,6 @@ pub fn ppd_options_with_ppd(o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdO
 
 /// The `lp` argument vector (without the program name).
 pub fn lp_args(pdf: &Path, o: &PrintOptions) -> Vec<String> {
-    lp_args_with_ppd(pdf, o, None)
-}
-
-pub fn lp_args_with_ppd(pdf: &Path, o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdOption>>) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = &o.printer {
         a.push("-d".into());
@@ -380,7 +332,7 @@ pub fn lp_args_with_ppd(pdf: &Path, o: &PrintOptions, ppd: Option<&BTreeMap<Stri
     a.push("1".into()); // copies are already expanded into the PDF
     a.push("-t".into());
     a.push("CardDeck".into());
-    for (k, v) in ppd_options_with_ppd(o, ppd) {
+    for (k, v) in ppd_options(o) {
         a.push("-o".into());
         a.push(format!("{k}={v}"));
     }
@@ -397,12 +349,8 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 pub fn lp_command_line(pdf: &Path, o: &PrintOptions) -> String {
-    lp_command_line_with_ppd(pdf, o, None)
-}
-
-pub fn lp_command_line_with_ppd(pdf: &Path, o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdOption>>) -> String {
     let mut s = String::from("lp");
-    for a in lp_args_with_ppd(pdf, o, ppd) {
+    for a in lp_args(pdf, o) {
         s.push(' ');
         s.push_str(&shell_quote(&a));
     }
@@ -497,14 +445,7 @@ pub fn validate_against_ppd(o: &PrintOptions, ppd: &BTreeMap<String, PpdOption>)
         problems.push("This queue does not look like a Magicard driver queue (no UTDuplex option). Options will be sent anyway.".into());
         return problems;
     }
-    if let Some(label) = o.colour_correction.as_deref().filter(|s| !s.is_empty()) {
-        if resolve_colour_correction(label, Some(ppd)).is_none() {
-            problems.push(format!(
-                "Colour correct \"{label}\" could not be mapped to this printer's ColourCorrection choices"
-            ));
-        }
-    }
-    for (k, v) in ppd_options_with_ppd(o, Some(ppd)) {
+    for (k, v) in ppd_options(o) {
         if k == "print-scaling" {
             continue;
         }

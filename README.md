@@ -104,9 +104,9 @@ Results with 12 real files (Hub 2.0.6/2.0.8) on Linux with Liberation fonts as s
 
 | Check | Result |
 |---|---|
-| front vs Hub `about.preview`, whole image | mean abs diff 6.1 / 255 (worst 6.5): almost all of it is font substitution |
-| front vs preview, outside text boxes (shapes, images, QR) | mean 1.4 (worst 3.1; the worst file has a stale preview) |
-| both sides vs the Pillow reference renders | front 4.5, back 2.9 |
+| front vs Hub `about.preview`, whole image | mean abs diff 6.0 / 255 (worst 6.4): almost all of it is font substitution |
+| front vs preview, outside text boxes (shapes, images, QR) | mean 1.3 (worst 2.8: `test.card`, whose saved preview is stale) |
+| both sides vs the Pillow reference renders | front 4.7, back 2.9 |
 | stored QR bitmaps decode to their `qrData` | 24/24 |
 | QR codes still scan after the full render | 24/24 |
 | regenerated QR (if a bitmap is missing) decodes to `qrData` | 24/24 |

@@ -721,31 +721,35 @@ fn draw_qr(ctx: &mut Ctx, e: &Element) {
 struct TextStyle {
     size: f32,
     letter_spacing: f32,
+    /// Horizontal squeeze applied to advances and outlines (font substitution / fit-to-box).
+    xs: f32,
 }
 
 /// Konva's line breaking for `wrap` = word | char | none (see `Text._setTextData`).
-fn layout_lines(chain: &FaceChain, text: &str, st: &TextStyle, width: Option<f32>, wrap: &str, max_h: Option<f32>, lh_px: f32) -> Vec<String> {
-    let measure = |s: &str| chain.measure(s, st.size, st.letter_spacing);
+fn layout_lines(chain: &FaceChain, text: &str, st: &TextStyle, width: Option<f32>, wrap: &str, max_h: Option<f32>, lh_px: f32) -> (Vec<String>, bool) {
+    let measure = |s: &str| chain.measure(s, st.size, st.letter_spacing) * st.xs;
+    let mut truncated = false;
     let should_wrap = wrap != "none" && width.is_some();
     let max_w = width.unwrap_or(f32::MAX);
     let mut out: Vec<String> = Vec::new();
     let mut cur_h = 0.0f32;
     let height_exceeded = |cur_h: f32| max_h.map(|m| cur_h + lh_px > m + 0.001).unwrap_or(false);
-    'paras: for para in text.split('\n') {
+    let n_paras = text.split('\n').count();
+    'paras: for (para_idx, para) in text.split('\n').enumerate() {
         let mut line: Vec<char> = para.chars().collect();
         if !should_wrap {
             out.push(para.to_string());
             cur_h += lh_px;
             if height_exceeded(cur_h) {
-                break 'paras;
+                { truncated = para_idx + 1 < n_paras; break 'paras; }
             }
             continue;
         }
-        if line.is_empty() {
-            out.push(String::new());
+        if line.is_empty() || measure(para) <= max_w {
+            out.push(para.to_string());
             cur_h += lh_px;
             if height_exceeded(cur_h) {
-                break 'paras;
+                { truncated = para_idx + 1 < n_paras; break 'paras; }
             }
             continue;
         }
@@ -786,25 +790,25 @@ fn layout_lines(chain: &FaceChain, text: &str, st: &TextStyle, width: Option<f32
             let piece: String = line[..mlen].iter().collect::<String>().trim_end().to_string();
             out.push(piece);
             cur_h += lh_px;
-            if height_exceeded(cur_h) {
-                break 'paras;
-            }
             let rest: String = line[mlen..].iter().collect::<String>().trim_start().to_string();
             line = rest.chars().collect();
+            if height_exceeded(cur_h) {
+                { truncated = !line.is_empty() || para_idx + 1 < n_paras; break 'paras; }
+            }
             if !line.is_empty() {
                 let s: String = line.iter().collect();
                 if measure(&s) <= max_w {
                     out.push(s);
                     cur_h += lh_px;
                     if height_exceeded(cur_h) {
-                        break 'paras;
+                        { truncated = para_idx + 1 < n_paras; break 'paras; }
                     }
                     break;
                 }
             }
         }
     }
-    out
+    (out, truncated)
 }
 
 fn draw_text(ctx: &mut Ctx, e: &Element) {
@@ -828,26 +832,50 @@ fn draw_text(ctx: &mut Ctx, e: &Element) {
     if !used.eq_ignore_ascii_case(family.trim()) {
         ctx.warn(format!("Font \"{family}\" is not installed; using \"{used}\""));
     }
-    let st = TextStyle { size, letter_spacing: e.num_or("letterSpacing", 0.0) as f32 };
     let padding = e.num_or("padding", 0.0) as f32;
     let line_height = e.num_or("lineHeight", 1.0) as f32;
     let lh_px = line_height * size;
     let width_attr = e.num("width").filter(|w| *w > 0.0).map(|w| w as f32);
     let height_attr = e.num("height").filter(|h| *h > 0.0).map(|h| h as f32);
     let wrap = e.str("wrap").unwrap_or("word");
-    let lines = layout_lines(
-        &chain,
-        text,
-        &st,
-        width_attr.map(|w| w - padding * 2.0),
-        wrap,
-        height_attr.map(|h| h - padding * 2.0),
-        lh_px,
-    );
+    let inner_w = width_attr.map(|w| w - padding * 2.0);
+    let inner_h = height_attr.map(|h| h - padding * 2.0);
+    let substituted = !used.eq_ignore_ascii_case(family.trim());
+    let base_xs = if substituted { crate::fonts::substitute_x_scale(family) } else { 1.0 };
+    let mut st = TextStyle { size, letter_spacing: e.num_or("letterSpacing", 0.0) as f32, xs: base_xs };
+    let (mut lines, mut truncated) = layout_lines(&chain, text, &st, inner_w, wrap, inner_h, lh_px);
+    if substituted {
+        // The design was laid out with a narrower/wider font than the one we have. Hub fitted the text to
+        // its box, so squeeze the substitute horizontally (down to 75%) when it would not fit.
+        let autosize = e.boolean("autoSize") == Some(true);
+        let widest = |lines: &Vec<String>, st: &TextStyle| lines.iter().map(|l| chain.measure(l, size, st.letter_spacing) * st.xs).fold(0.0f32, f32::max);
+        if let Some(iw) = inner_w {
+            if autosize && widest(&lines, &st) > iw {
+                st.xs = (st.xs * iw / widest(&lines, &st)).max(base_xs * 0.75);
+                (lines, truncated) = layout_lines(&chain, text, &st, inner_w, wrap, inner_h, lh_px);
+            }
+        }
+        if truncated {
+            let mut f = 0.95;
+            while truncated && f >= 0.74 {
+                st.xs = base_xs * f;
+                (lines, truncated) = layout_lines(&chain, text, &st, inner_w, wrap, inner_h, lh_px);
+                f -= 0.05;
+            }
+        }
+    }
+    if truncated {
+        // Hub never truncates its own layout, so this is a substitution artefact: show everything.
+        st.xs = base_xs.min(st.xs);
+        (lines, _) = layout_lines(&chain, text, &st, inner_w, wrap, None, lh_px);
+    }
     if lines.is_empty() {
         return;
     }
-    let shaped: Vec<_> = lines.iter().map(|l| chain.shape(l, size, st.letter_spacing)).collect();
+    let mut shaped: Vec<_> = lines.iter().map(|l| chain.shape(l, size, st.letter_spacing)).collect();
+    for sl in shaped.iter_mut() {
+        sl.width *= st.xs;
+    }
     let text_w = shaped.iter().map(|s| s.width).fold(0.0f32, f32::max);
     let box_w = width_attr.unwrap_or(text_w + padding * 2.0);
     let box_h = height_attr.unwrap_or(lines.len() as f32 * lh_px + padding * 2.0);
@@ -885,7 +913,7 @@ fn draw_text(ctx: &mut Ctx, e: &Element) {
             let face = &chain.faces[g.face];
             if let Some(path) = face.outline(g.gid) {
                 let s = size / face.units_per_em();
-                let t = Transform::from_row(s, 0.0, 0.0, -s, lx + g.x, base_y + g.y);
+                let t = Transform::from_row(s * st.xs, 0.0, 0.0, -s, lx + g.x * st.xs, base_y + g.y);
                 if let Some(p) = path.transform(t) {
                     pb.push_path(&p);
                 }

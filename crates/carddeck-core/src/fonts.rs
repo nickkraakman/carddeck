@@ -332,3 +332,12 @@ impl FaceChain {
         self.shape(text, size, letter_spacing).width
     }
 }
+
+/// Horizontal scale applied when a font is replaced by a substitute that is known to be wider.
+/// Myriad Pro is noticeably narrower than Helvetica/Arial (about 12 percent for bold).
+pub fn substitute_x_scale(family: &str) -> f32 {
+    match family.trim().to_lowercase().as_str() {
+        "myriad pro" | "myriad" => 0.9,
+        _ => 1.0,
+    }
+}

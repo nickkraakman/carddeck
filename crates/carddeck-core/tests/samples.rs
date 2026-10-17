@@ -44,8 +44,11 @@ fn text_boxes(card: &Card, scale: f32) -> Vec<(f32, f32, f32, f32)> {
 }
 
 fn bbox(e: &Element, scale: f32) -> (f32, f32, f32, f32) {
-    let w = e.num_or("width", 0.0) as f32;
-    let h = e.num_or("height", 0.0) as f32;
+    let fs = e.num_or("fontSize", 20.0) as f32;
+    let text = e.str("text").unwrap_or("");
+    let longest = text.split('\n').map(|l| l.chars().count()).max().unwrap_or(1) as f32;
+    let w = e.num("width").map(|v| v as f32).unwrap_or(longest * fs * 0.65);
+    let h = e.num("height").map(|v| v as f32).unwrap_or(text.split('\n').count() as f32 * fs * 1.3);
     let ts = node_transform(tiny_skia::Transform::from_scale(scale, scale), e);
     let mut pts = [(0.0, 0.0), (w, 0.0), (w, h), (0.0, h)];
     for p in pts.iter_mut() {

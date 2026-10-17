@@ -84,6 +84,8 @@ pub struct PrintOptions {
     pub black: BlackMode,
     /// Photo black nudged to (1,1,1) so photos never use resin.
     pub prevent_resin_for_images: bool,
+    /// Hub `adjustments.correction` label (e.g. `"Saturation"`). Mapped to PPD `ColourCorrection`.
+    pub colour_correction: Option<String>,
     /// Extra raw `-o name=value` pairs (advanced: e.g. `CFRotation=1Rotation`).
     pub extra_options: Vec<(String, String)>,
 }
@@ -102,8 +104,100 @@ impl Default for PrintOptions {
             overcoat_back: true,
             black: BlackMode::ResinK,
             prevent_resin_for_images: true,
+            colour_correction: None,
             extra_options: Vec::new(),
         }
+    }
+}
+
+/// Hub Colour Correct labels shown in Magicard Hub (and stored in `.card` as `adjustments.correction`).
+pub const HUB_COLOUR_CORRECTIONS: &[&str] = &[
+    "None",
+    "Gamma 1",
+    "Gamma 2",
+    "Absolute Colorimetric",
+    "Relative Colorimetric",
+    "Perceptual",
+    "Saturation",
+];
+
+fn norm_label(s: &str) -> String {
+    s.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(|c| c.to_lowercase())
+        .collect()
+}
+
+/// Maps a Hub colour-correct label to a PPD `ColourCorrection` choice value.
+///
+/// Prefers matching against the live printer's choice labels when `ppd` is provided; otherwise uses
+/// the Pro 300 / modern Magicard macOS driver numbering (None=0, Driver managed=1, Perceptual=2,
+/// Saturation=3, Relative=4, Absolute=5). Gamma 1/2 map to "Driver managed" on that PPD.
+pub fn resolve_colour_correction(hub_label: &str, ppd: Option<&BTreeMap<String, PpdOption>>) -> Option<String> {
+    let want = norm_label(hub_label);
+    if want.is_empty() {
+        return None;
+    }
+    if let Some(ppd) = ppd {
+        if let Some(opt) = ppd.get("ColourCorrection") {
+            // Aliases from Hub names onto typical PPD labels.
+            let aliases: &[&str] = match want.as_str() {
+                "none" => &["none"],
+                "gamma1" => &["gamma1", "drivermanaged", "fordarkimages", "normal"],
+                "gamma2" => &["gamma2", "forlightimages", "drivermanaged"],
+                "absolutecolorimetric" | "absolutecolourimetric" => &["absolutecolorimetric", "absolutecolourimetric"],
+                "relativecolorimetric" | "relativecolourimetric" => &["relativecolorimetric", "relativecolourimetric"],
+                "perceptual" => &["perceptual"],
+                "saturation" => &["saturation"],
+                "drivermanaged" => &["drivermanaged"],
+                other => {
+                    // Fall through: try exact/substring match on `other` itself.
+                    let _ = other;
+                    &[]
+                }
+            };
+            for choice in &opt.choices {
+                let label = choice_label_from_ppd_token(choice);
+                let n = norm_label(&label);
+                if n == want || aliases.iter().any(|a| n == *a) || n.contains(&want) || want.contains(&n) {
+                    return Some(choice.clone());
+                }
+            }
+            // Second pass: alias-only against labels when Hub name itself is not a PPD label.
+            for alias in aliases {
+                for choice in &opt.choices {
+                    if norm_label(&choice_label_from_ppd_token(choice)) == *alias {
+                        return Some(choice.clone());
+                    }
+                }
+            }
+        }
+    }
+    // Static Pro 300-style fallback (matches official macOS 1.5.0 `pro300.ppd`).
+    let value = match want.as_str() {
+        "none" => "0ColourCorrection",
+        "gamma1" | "gamma2" | "drivermanaged" => "1ColourCorrection",
+        "perceptual" => "2ColourCorrection",
+        "saturation" => "3ColourCorrection",
+        "relativecolorimetric" | "relativecolourimetric" => "4ColourCorrection",
+        "absolutecolorimetric" | "absolutecolourimetric" => "5ColourCorrection",
+        _ => return None,
+    };
+    Some(value.into())
+}
+
+/// `lpoptions -l` prints choice tokens like `3ColourCorrection`; the human label is not included.
+/// PPD files use `3ColourCorrection/Saturation`. When we only have the token, derive a guess from
+/// known Pro 300 numbering, else return the raw token.
+fn choice_label_from_ppd_token(choice: &str) -> String {
+    match choice {
+        "0ColourCorrection" => "None".into(),
+        "1ColourCorrection" => "Driver managed".into(),
+        "2ColourCorrection" => "Perceptual".into(),
+        "3ColourCorrection" => "Saturation".into(),
+        "4ColourCorrection" => "Relative colorimetric".into(),
+        "5ColourCorrection" => "Absolute colorimetric".into(),
+        other => other.to_string(),
     }
 }
 
@@ -232,7 +326,14 @@ pub fn write_pdf(job: &Job) -> Vec<u8> {
 }
 
 /// PPD options for `lp`, in a stable order. Names come from the Magicard PPDs.
+///
+/// When `ppd` is `Some`, `colour_correction` is resolved against the live choice list; otherwise the
+/// Pro 300 static map is used.
 pub fn ppd_options(o: &PrintOptions) -> Vec<(String, String)> {
+    ppd_options_with_ppd(o, None)
+}
+
+pub fn ppd_options_with_ppd(o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdOption>>) -> Vec<(String, String)> {
     let mut v: Vec<(String, String)> = vec![
         ("PageSize".into(), "1XCR80".into()),
         ("UTDuplex".into(), o.sides.ppd().into()),
@@ -248,6 +349,11 @@ pub fn ppd_options(o: &PrintOptions) -> Vec<(String, String)> {
     }
     v.push(("CFOverCoat".into(), if o.overcoat_front { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
     v.push(("CBOverCoat".into(), if o.overcoat_back { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
+    if let Some(label) = o.colour_correction.as_deref().filter(|s| !s.is_empty()) {
+        if let Some(val) = resolve_colour_correction(label, ppd) {
+            v.push(("ColourCorrection".into(), val));
+        }
+    }
     v.push(("print-scaling".into(), "none".into()));
     for (k, val) in &o.extra_options {
         if let Some(slot) = v.iter_mut().find(|(n, _)| n == k) {
@@ -261,6 +367,10 @@ pub fn ppd_options(o: &PrintOptions) -> Vec<(String, String)> {
 
 /// The `lp` argument vector (without the program name).
 pub fn lp_args(pdf: &Path, o: &PrintOptions) -> Vec<String> {
+    lp_args_with_ppd(pdf, o, None)
+}
+
+pub fn lp_args_with_ppd(pdf: &Path, o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdOption>>) -> Vec<String> {
     let mut a = Vec::new();
     if let Some(p) = &o.printer {
         a.push("-d".into());
@@ -270,7 +380,7 @@ pub fn lp_args(pdf: &Path, o: &PrintOptions) -> Vec<String> {
     a.push("1".into()); // copies are already expanded into the PDF
     a.push("-t".into());
     a.push("CardDeck".into());
-    for (k, v) in ppd_options(o) {
+    for (k, v) in ppd_options_with_ppd(o, ppd) {
         a.push("-o".into());
         a.push(format!("{k}={v}"));
     }
@@ -287,8 +397,12 @@ pub fn shell_quote(s: &str) -> String {
 }
 
 pub fn lp_command_line(pdf: &Path, o: &PrintOptions) -> String {
+    lp_command_line_with_ppd(pdf, o, None)
+}
+
+pub fn lp_command_line_with_ppd(pdf: &Path, o: &PrintOptions, ppd: Option<&BTreeMap<String, PpdOption>>) -> String {
     let mut s = String::from("lp");
-    for a in lp_args(pdf, o) {
+    for a in lp_args_with_ppd(pdf, o, ppd) {
         s.push(' ');
         s.push_str(&shell_quote(&a));
     }
@@ -383,7 +497,14 @@ pub fn validate_against_ppd(o: &PrintOptions, ppd: &BTreeMap<String, PpdOption>)
         problems.push("This queue does not look like a Magicard driver queue (no UTDuplex option). Options will be sent anyway.".into());
         return problems;
     }
-    for (k, v) in ppd_options(o) {
+    if let Some(label) = o.colour_correction.as_deref().filter(|s| !s.is_empty()) {
+        if resolve_colour_correction(label, Some(ppd)).is_none() {
+            problems.push(format!(
+                "Colour correct \"{label}\" could not be mapped to this printer's ColourCorrection choices"
+            ));
+        }
+    }
+    for (k, v) in ppd_options_with_ppd(o, Some(ppd)) {
         if k == "print-scaling" {
             continue;
         }

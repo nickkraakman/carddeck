@@ -32,7 +32,7 @@
       <div class="empty-card">
         <h1>CardDeck</h1>
         <p>Drop a <code>.card</code> file here, or click <b>Open…</b></p>
-        <p class="small">No file handy? Try the <b>Calibration card</b> to check orientation before your first print.</p>
+        <p class="small">No file handy? Try the <b>Calibration card</b> before your first print.</p>
       </div>
     </div>
     <div id="stage" class="stage hidden"></div>
@@ -65,31 +65,20 @@
       <label class="check"><input id="oc-back" type="checkbox" checked> Back</label>
     </fieldset>
 
-    <label class="row">Black
-      <select id="black">
-        <option value="resin">Resin K: pure #000000 → K panel</option>
-        <option value="composite">Composite (YMC, no resin)</option>
-        <option value="mono">Mono K only</option>
-      </select>
-    </label>
-    <label class="check"><input id="nudge" type="checkbox" checked> Keep photo blacks off the resin (0,0,0 → 1,1,1)</label>
-
     <fieldset>
-      <legend>Orientation <span class="badge">unverified</span></legend>
-      <label class="row">Turn card to portrait page
-        <select id="turn">
-          <option value="ccw">Counter-clockwise (default)</option>
-          <option value="cw">Clockwise</option>
+      <legend>Adjustments</legend>
+      <label class="row">Colour correct
+        <select id="colour-correct">
+          <option value="None">None</option>
+          <option value="Gamma 1">Gamma 1</option>
+          <option value="Gamma 2">Gamma 2</option>
+          <option value="Absolute Colorimetric">Absolute Colorimetric</option>
+          <option value="Relative Colorimetric">Relative Colorimetric</option>
+          <option value="Perceptual">Perceptual</option>
+          <option value="Saturation">Saturation</option>
         </select>
       </label>
-      <label class="check"><input id="rot-front" type="checkbox"> Rotate front 180°</label>
-      <label class="check"><input id="rot-back" type="checkbox"> Rotate back 180°</label>
-      <label class="row">Fit 642 → 638 px
-        <select id="fit">
-          <option value="crop">Crop 2 px each edge (exact pixels)</option>
-          <option value="stretch">Stretch (whole card)</option>
-        </select>
-      </label>
+      <div class="note" id="colour-note">Stored in the .card file as <code>adjustments.correction</code> (same as Hub).</div>
     </fieldset>
 
     <details>

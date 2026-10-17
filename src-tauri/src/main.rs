@@ -16,6 +16,7 @@ use serde::{Deserialize, Serialize};
 use tauri::Emitter;
 use tauri::{Manager, State};
 
+#[derive(Clone)]
 struct Loaded {
     card: Card,
     name: String,
@@ -61,6 +62,8 @@ struct CardView {
     double_sided: bool,
     portrait: bool,
     dark_card: bool,
+    /// Hub `adjustments.correction` (Colour Correct), if present.
+    colour_correction: Option<String>,
     front: String,
     back: String,
     front_elements: usize,
@@ -98,6 +101,7 @@ fn view_of(app: &tauri::AppHandle, state: &AppState, loaded: &Loaded) -> CardVie
         double_sided: loaded.card.about.double_sided,
         portrait: loaded.card.about.portrait,
         dark_card: loaded.card.about.dark_card,
+        colour_correction: loaded.card.adjustments.correction.clone(),
         front: data_url(&front.to_png()),
         back: data_url(&back.to_png()),
         front_elements: loaded.card.front.elements.len(),
@@ -146,22 +150,32 @@ fn take_pending_open(state: State<'_, AppState>) -> Vec<String> {
 
 // ---- printing ---------------------------------------------------------------------------------
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 #[serde(default)]
 struct JobOpts {
     printer: Option<String>,
     sides: String,
     copies: u32,
-    turn: String,
-    fit: String,
-    rotate_front_180: bool,
-    rotate_back_180: bool,
     overcoat_front: bool,
     overcoat_back: bool,
-    black: String,
-    photo_nudge: bool,
+    /// Hub Colour Correct label (e.g. `"Saturation"`). Mapped to PPD `ColourCorrection`.
+    colour_correction: Option<String>,
     /// `NAME=VALUE` lines
     extra: Vec<String>,
+}
+
+impl Default for JobOpts {
+    fn default() -> Self {
+        JobOpts {
+            printer: None,
+            sides: "both".into(),
+            copies: 1,
+            overcoat_front: true,
+            overcoat_back: true,
+            colour_correction: None,
+            extra: Vec::new(),
+        }
+    }
 }
 
 impl JobOpts {
@@ -174,19 +188,15 @@ impl JobOpts {
                 _ => Sides::Both,
             },
             copies: self.copies.clamp(1, 99),
-            turn: if self.turn == "cw" { PageTurn::Cw90 } else { PageTurn::Ccw90 },
-            fit: if self.fit == "stretch" { PageFit::Stretch } else { PageFit::Crop },
-            rotate_front_180: self.rotate_front_180,
-            rotate_back_180: self.rotate_back_180,
             overcoat_front: self.overcoat_front,
             overcoat_back: self.overcoat_back,
-            black: match self.black.as_str() {
-                "composite" => BlackMode::CompositeYmc,
-                "mono" => BlackMode::MonoK,
-                _ => BlackMode::ResinK,
-            },
-            prevent_resin_for_images: self.photo_nudge,
-            extra_options: Vec::new(),
+            colour_correction: self
+                .colour_correction
+                .clone()
+                .map(|s| s.trim().to_string())
+                .filter(|s| !s.is_empty()),
+            // Orientation / black / photo-nudge stay on the sensible defaults in PrintOptions.
+            ..PrintOptions::default()
         };
         for line in &self.extra {
             if let Some((k, v)) = line.trim().split_once('=') {
@@ -217,24 +227,51 @@ fn current(state: &AppState) -> Result<Arc<Loaded>, String> {
     state.current.lock().unwrap().clone().ok_or_else(|| "Open a .card file first".to_string())
 }
 
+fn load_ppd(printer: &str) -> Result<std::collections::BTreeMap<String, PpdOption>, String> {
+    match Command::new("lpoptions").args(["-p", printer, "-l"]).output() {
+        Ok(out) if out.status.success() => Ok(parse_lpoptions(&String::from_utf8_lossy(&out.stdout))),
+        Ok(out) => Err(format!("lpoptions failed: {}", String::from_utf8_lossy(&out.stderr).trim())),
+        Err(e) => Err(format!("Could not run lpoptions: {e}")),
+    }
+}
+
 fn ppd_problems(o: &PrintOptions) -> Vec<String> {
     let Some(p) = &o.printer else { return vec![] };
-    match Command::new("lpoptions").args(["-p", p, "-l"]).output() {
-        Ok(out) if out.status.success() => {
-            let ppd = parse_lpoptions(&String::from_utf8_lossy(&out.stdout));
-            validate_against_ppd(o, &ppd)
-        }
-        Ok(out) => vec![format!("lpoptions failed: {}", String::from_utf8_lossy(&out.stderr).trim())],
-        Err(e) => vec![format!("Could not run lpoptions: {e}")],
+    match load_ppd(p) {
+        Ok(ppd) => validate_against_ppd(o, &ppd),
+        Err(e) => vec![e],
     }
 }
 
 fn build(app: &tauri::AppHandle, state: &AppState, opts: &JobOpts) -> Result<(Job, PrintOptions), String> {
     let loaded = current(state)?;
     let f = fonts(app, state);
-    let o = opts.to_options();
+    let mut o = opts.to_options();
+    // Prefer the value stored on the open card when the UI did not send one.
+    if o.colour_correction.is_none() {
+        o.colour_correction = loaded.card.adjustments.correction.clone();
+    }
     let job = build_job(&loaded.card, &f, &o).map_err(|e| e.to_string())?;
     Ok((job, o))
+}
+
+#[tauri::command]
+fn set_colour_correction(state: State<'_, AppState>, correction: String) -> Result<(), String> {
+    let correction = correction.trim().to_string();
+    if correction.is_empty() {
+        return Err("Colour correct value is empty".into());
+    }
+    let mut guard = state.current.lock().unwrap();
+    let Some(loaded) = guard.as_mut() else {
+        return Err("Open a .card file first".into());
+    };
+    let mut next = (**loaded).clone();
+    next.card.adjustments.correction = Some(correction.clone());
+    if let Some(path) = &next.path {
+        Card::write_colour_correction(std::path::Path::new(path), &correction).map_err(|e| e.to_string())?;
+    }
+    *loaded = Arc::new(next);
+    Ok(())
 }
 
 #[tauri::command]
@@ -252,7 +289,8 @@ async fn preview_job(app: tauri::AppHandle, opts: JobOpts) -> Result<JobPreview,
                 PagePreview { label: p.label.to_string(), png: data_url(&png) }
             })
             .collect();
-        let command = lp_command_line(std::path::Path::new("<job.pdf>"), &o);
+        let ppd = o.printer.as_deref().and_then(|p| load_ppd(p).ok());
+        let command = lp_command_line_with_ppd(std::path::Path::new("<job.pdf>"), &o, ppd.as_ref());
         Ok(JobPreview { pages, command, warnings: job.warnings.clone(), problems: ppd_problems(&o) })
     })
     .await
@@ -288,7 +326,11 @@ async fn print_job(app: tauri::AppHandle, opts: JobOpts) -> Result<String, Strin
         }
         let dir = std::env::temp_dir().join(format!("carddeck-{}", std::process::id()));
         let files = carddeck_core::print::save_job(&dir, &job, &o).map_err(|e| e.to_string())?;
-        let out = Command::new("lp").args(lp_args(&files[0], &o)).output().map_err(|e| format!("Could not run lp: {e}"))?;
+        let ppd = o.printer.as_deref().and_then(|p| load_ppd(p).ok());
+        let out = Command::new("lp")
+            .args(lp_args_with_ppd(&files[0], &o, ppd.as_ref()))
+            .output()
+            .map_err(|e| format!("Could not run lp: {e}"))?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         } else {
@@ -340,7 +382,16 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![open_card, open_calibration, take_pending_open, preview_job, save_job, print_job, list_printers])
+        .invoke_handler(tauri::generate_handler![
+            open_card,
+            open_calibration,
+            take_pending_open,
+            set_colour_correction,
+            preview_job,
+            save_job,
+            print_job,
+            list_printers
+        ])
         .build(tauri::generate_context!())
         .expect("error while building CardDeck");
     app.run(|handle, event| {

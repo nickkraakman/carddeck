@@ -14,6 +14,22 @@ function esc(s) { return String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<
 
 // ---- viewer -----------------------------------------------------------------------------------
 
+function syncColourCorrectFromCard() {
+  const c = state.card;
+  const sel = $('colour-correct');
+  const v = (c && c.colour_correction) || 'None';
+  if (![...sel.options].some((o) => o.value === v)) {
+    const o = document.createElement('option');
+    o.value = v;
+    o.textContent = v;
+    sel.appendChild(o);
+  }
+  sel.value = v;
+  $('colour-note').textContent = c && c.path
+    ? 'Saved in this .card file (adjustments.correction), same field Hub uses.'
+    : 'Not saved until the card is a real .card file on disk.';
+}
+
 function render() {
   const c = state.card;
   $('empty').classList.toggle('hidden', !!c);
@@ -50,6 +66,7 @@ function render() {
   } else {
     w.classList.add('hidden');
   }
+  syncColourCorrectFromCard();
   updatePrintButtons();
   const bothOpt = $('sides').querySelector('option[value="both"]');
   if (!c.double_sided) { $('sides').value = 'front'; } else if ($('sides').value === 'front' && !state.userSides) { $('sides').value = 'both'; }
@@ -84,6 +101,18 @@ async function chooseFile() {
   if (p) openPath(Array.isArray(p) ? p[0] : p);
 }
 
+async function onColourCorrectChange() {
+  const v = $('colour-correct').value;
+  if (!state.card) return;
+  state.card.colour_correction = v;
+  try {
+    await invoke('set_colour_correction', { correction: v });
+    setStatus(state.card.path ? `Colour correct saved: ${v}` : `Colour correct: ${v}`, 'ok');
+  } catch (e) {
+    setStatus(String(e), 'error');
+  }
+}
+
 // ---- printing ---------------------------------------------------------------------------------
 
 function jobOpts() {
@@ -91,14 +120,9 @@ function jobOpts() {
     printer: $('printer').value || null,
     sides: $('sides').value,
     copies: Math.max(1, parseInt($('copies').value, 10) || 1),
-    turn: $('turn').value,
-    fit: $('fit').value,
-    rotate_front_180: $('rot-front').checked,
-    rotate_back_180: $('rot-back').checked,
     overcoat_front: $('oc-front').checked,
     overcoat_back: $('oc-back').checked,
-    black: $('black').value,
-    photo_nudge: $('nudge').checked,
+    colour_correction: $('colour-correct').value || null,
     extra: $('extra').value.split('\n').map((s) => s.trim()).filter(Boolean),
   };
 }
@@ -143,7 +167,7 @@ async function previewJob() {
     const box = $('print-preview');
     box.classList.remove('hidden');
     box.innerHTML = `<h3>Print preview: the raster pages sent to the driver (638×1013, portrait)</h3>
-      <div class="small" style="color:var(--muted)">If the saved card does not look like this on paper, change the Orientation settings and print the calibration card again.</div>
+      <div class="small" style="color:var(--muted)">These are the pages CardDeck sends to the Magicard CUPS driver.</div>
       <div class="pages">${r.pages.map((p) => `<div><div class="small" style="color:var(--muted)">${esc(p.label)}</div><img src="${p.png}" alt="${esc(p.label)}"></div>`).join('')}</div>`;
     showProblems(r);
     setStatus('Preview ready', 'ok');
@@ -191,6 +215,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('printer-refresh').onclick = refreshPrinters;
   $('printer').onchange = updatePrintButtons;
   $('sides').onchange = () => { state.userSides = true; };
+  $('colour-correct').onchange = onColourCorrectChange;
   $('btn-preview').onclick = previewJob;
   $('btn-save').onclick = saveJob;
   $('btn-print').onclick = printJob;

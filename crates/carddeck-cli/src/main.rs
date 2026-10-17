@@ -25,6 +25,7 @@ JOB/PRINT OPTIONS:
   --no-overcoat-front / --no-overcoat-back
   --black resin|composite|mono   (default resin: pure #000000 -> K panel)
   --no-photo-nudge            keep pure-black photo pixels (they will print on resin)
+  --colour-correct LABEL      Hub Colour Correct (default: adjustments.correction from the file)
   --opt NAME=VALUE            extra lp -o option, repeatable (e.g. CFRotation=1Rotation)
   -d <printer>                CUPS queue name
 ";
@@ -38,7 +39,11 @@ fn main() {
 }
 
 fn parse_opts(args: &[String], card: &Card) -> Result<PrintOptions, String> {
-    let mut o = PrintOptions { sides: if card.about.double_sided { Sides::Both } else { Sides::Front }, ..Default::default() };
+    let mut o = PrintOptions {
+        sides: if card.about.double_sided { Sides::Both } else { Sides::Front },
+        colour_correction: card.adjustments.correction.clone(),
+        ..Default::default()
+    };
     let mut i = 0;
     let val = |i: usize| args.get(i + 1).cloned().ok_or_else(|| format!("{} needs a value", args[i]));
     while i < args.len() {
@@ -90,6 +95,10 @@ fn parse_opts(args: &[String], card: &Card) -> Result<PrintOptions, String> {
             "--no-overcoat-front" => o.overcoat_front = false,
             "--no-overcoat-back" => o.overcoat_back = false,
             "--no-photo-nudge" => o.prevent_resin_for_images = false,
+            "--colour-correct" => {
+                o.colour_correction = Some(val(i)?);
+                i += 1;
+            }
             "--opt" => {
                 let v = val(i)?;
                 let (k, x) = v.split_once('=').ok_or("--opt needs NAME=VALUE")?;
@@ -111,6 +120,9 @@ fn run(args: &[String]) -> Result<(), String> {
             println!("type: {}   frame: {w}x{h}px   hub: {}", card.about.type_name, card.about.hub_version);
             println!("double sided: {}   portrait: {}   dark card: {}", card.about.double_sided, card.about.portrait, card.about.dark_card);
             println!("front elements: {}   back elements: {}", card.front.elements.len(), card.back.elements.len());
+            if let Some(c) = &card.adjustments.correction {
+                println!("colour correct: {c}");
+            }
             for f in &card.about.features {
                 println!("unsupported feature flag: {f}");
             }

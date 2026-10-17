@@ -623,7 +623,16 @@ fn crop_pixmap(src: &Pixmap, x: u32, y: u32, w: u32, h: u32) -> Option<Pixmap> {
     src.clone_rect(rect)
 }
 
-fn draw_image_pixmap(ctx: &mut Ctx, e: &Element, src: Pixmap, smooth: bool) {
+#[derive(Clone, Copy, PartialEq)]
+enum ImgMode {
+    /// Photos and icons: area filter when shrinking, bicubic/bilinear otherwise.
+    Smooth,
+    /// Barcodes: never filtered.
+    Nearest,
+}
+
+fn draw_image_pixmap(ctx: &mut Ctx, e: &Element, src: Pixmap, mode: ImgMode) {
+    let smooth = mode == ImgMode::Smooth;
     let (iw, ih) = (src.width() as f32, src.height() as f32);
     // crop
     let (mut cx, mut cy, mut cw, mut ch) = (
@@ -693,7 +702,7 @@ fn draw_image(ctx: &mut Ctx, e: &Element) {
     };
     let nudge = ctx.opts.prevent_resin_for_images && !is_barcode && e.boolean("monochrome") != Some(true);
     match decode_to_pixmap(url, nudge) {
-        Some(pm) => draw_image_pixmap(ctx, e, pm, !is_barcode),
+        Some(pm) => draw_image_pixmap(ctx, e, pm, if is_barcode { ImgMode::Nearest } else { ImgMode::Smooth }),
         None => ctx.warn("An image could not be decoded and was skipped".into()),
     }
 }
@@ -702,7 +711,8 @@ fn draw_qr(ctx: &mut Ctx, e: &Element) {
     // Prefer the stored bitmap (that is what Hub prints); regenerate from qrData if it is unusable.
     if let Some(url) = e.str("base64image").filter(|s| !s.is_empty()) {
         if let Some(pm) = decode_to_pixmap(url, false) {
-            draw_image_pixmap(ctx, e, pm, false);
+            // Nearest neighbour, like Hub's print path (smoothing is disabled for QR codes there).
+            draw_image_pixmap(ctx, e, pm, ImgMode::Nearest);
             return;
         }
     }
@@ -710,7 +720,7 @@ fn draw_qr(ctx: &mut Ctx, e: &Element) {
     match crate::qr::qr_pixmap(data) {
         Some(pm) => {
             ctx.warn("QR code bitmap missing; regenerated from its data".into());
-            draw_image_pixmap(ctx, e, pm, false)
+            draw_image_pixmap(ctx, e, pm, ImgMode::Nearest)
         }
         None => ctx.warn("QR code could not be rendered".into()),
     }

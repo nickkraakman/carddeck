@@ -21,3 +21,4 @@ miniz_oxide = "0.8"
 
 [dev-dependencies]
 tempfile = "3"
+rqrr = "0.9"

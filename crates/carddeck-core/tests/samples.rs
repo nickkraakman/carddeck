@@ -133,6 +133,138 @@ fn front_matches_hub_preview() {
     }
     let n = files.len() as f64;
     println!("MEAN over {} cards: full {:.2}, outside text boxes {:.2} (worst {:.2} / {:.2})", files.len(), full_sum / n, geo_sum / n, worst_full, worst_geo);
-    assert!(worst_geo < 3.0, "non-text regions differ too much from Hub preview: {worst_geo}");
-    assert!(worst_full < 12.0, "full render differs too much from Hub preview: {worst_full}");
+    // `test.card` has a stale about.preview (text elements differ), hence the looser worst-case bound.
+    assert!(geo_sum / n < 1.8, "non-text regions differ too much from Hub preview: mean {}", geo_sum / n);
+    assert!(worst_geo < 3.5, "non-text regions differ too much from Hub preview: {worst_geo}");
+    assert!(full_sum / n < 7.0 && worst_full < 8.0, "full render differs too much from Hub preview: {worst_full}");
+}
+
+/// Both sides against the Pillow reference renders (`<stem>-front.png`/`-back.png` in `<samples>/render`).
+/// The reference renderer is approximate too (different text engine), so this mostly guards the back side,
+/// which has no Hub-generated preview.
+#[test]
+fn both_sides_close_to_reference_renders() {
+    let render_dir = samples_dir().join("render");
+    let fonts = FontSet::system();
+    let mut n = 0;
+    let mut sums = [0.0f64; 2];
+    let mut worst: f64 = 0.0;
+    for f in card_files() {
+        let stem = f.file_stem().unwrap().to_string_lossy().replace(' ', "_");
+        for (i, side) in ["front", "back"].iter().enumerate() {
+            let p = render_dir.join(format!("{stem}-{side}.png"));
+            let Ok(refimg) = image::open(&p) else { continue };
+            let refimg = over_white(&refimg.to_rgba8());
+            let card = Card::from_file(&f).unwrap();
+            let r = render_side(&card, i == 1, &fonts, &RenderOptions::default());
+            let ours = r.to_rgb_over_white();
+            if ours.dimensions() != refimg.dimensions() {
+                continue;
+            }
+            let m = mad(&ours, &refimg, &[]);
+            println!("{stem:<22} {side:<6} MAD vs reference render: {m:.2}");
+            sums[i] += m;
+            worst = worst.max(m);
+            if i == 0 {
+                n += 1;
+            }
+        }
+    }
+    if n == 0 {
+        eprintln!("SKIP: no reference renders found in {}", render_dir.display());
+        return;
+    }
+    println!("MEAN vs reference renders: front {:.2}, back {:.2} over {n} cards (worst {worst:.2})", sums[0] / n as f64, sums[1] / n as f64);
+    assert!(worst < 12.0, "render differs too much from the reference renders: {worst}");
+}
+
+/// Decodes a pixmap/bitmap QR code with an independent decoder (rqrr).
+fn decode_qr(img: &image::RgbaImage) -> Option<String> {
+    // put on a white quiet-zone border, grayscale
+    let b = 24u32;
+    let mut g = image::GrayImage::from_pixel(img.width() + 2 * b, img.height() + 2 * b, image::Luma([255]));
+    for (x, y, p) in img.enumerate_pixels() {
+        let a = p.0[3] as f32 / 255.0;
+        let v = (p.0[0] as f32 * a + 255.0 * (1.0 - a)) as u8;
+        g.put_pixel(x + b, y + b, image::Luma([v]));
+    }
+    let mut prep = rqrr::PreparedImage::prepare(g);
+    prep.detect_grids().first().and_then(|grid| grid.decode().ok()).map(|(_, content)| content)
+}
+
+/// Stored QR bitmaps decode to their `qrData`, and regenerated ones decode to the same text
+/// (module patterns differ because encoders may pick a different mask; decoding is what matters).
+#[test]
+fn qr_bitmaps_and_regeneration_decode_to_qrdata() {
+    let mut checked = 0;
+    let mut stored_ok = 0;
+    let mut regen_ok = 0;
+    for f in card_files() {
+        let card = Card::from_file(&f).unwrap();
+        for e in card.front.elements.iter().chain(card.back.elements.iter()) {
+            if e.name() != "QRCode" {
+                continue;
+            }
+            let data = e.str("qrData").filter(|s| !s.is_empty()).unwrap_or("123456789");
+            let Ok(bytes) = carddeck_core::decode_data_url(e.str("base64image").unwrap_or("")) else { continue };
+            let stored = image::load_from_memory(&bytes).unwrap().to_rgba8();
+            checked += 1;
+            if decode_qr(&stored).as_deref() == Some(data) {
+                stored_ok += 1;
+            }
+            let regen = carddeck_core::qr::qr_pixmap(data).unwrap();
+            // scale up 6x nearest so the detector has enough pixels per module
+            let img = carddeck_core::render::pixmap_to_rgba(&regen);
+            let big = image::imageops::resize(&img, img.width() * 6, img.height() * 6, FilterType::Nearest);
+            if decode_qr(&big).as_deref() == Some(data) {
+                regen_ok += 1;
+            }
+        }
+    }
+    if checked == 0 {
+        eprintln!("SKIP: no QR codes in samples");
+        return;
+    }
+    println!("QR codes: stored bitmap decodes to qrData {stored_ok}/{checked}; regenerated decodes {regen_ok}/{checked}");
+    assert_eq!(stored_ok, checked);
+    assert_eq!(regen_ok, checked);
+}
+
+/// QR codes must still scan after the full render (scaling, placement).
+#[test]
+fn rendered_qr_codes_scan() {
+    let fonts = FontSet::system();
+    let (mut total, mut ok) = (0, 0);
+    for f in card_files() {
+        let card = Card::from_file(&f).unwrap();
+        let rgba = pixmap_rgba(&render_side(&card, false, &fonts, &RenderOptions::default()));
+        for e in &card.front.elements {
+            if e.name() != "QRCode" || !e.visible() {
+                continue;
+            }
+            let (x, y) = (e.num_or("x", 0.0).max(0.0) as u32, e.num_or("y", 0.0).max(0.0) as u32);
+            let (w, h) = (e.num_or("width", 0.0) as u32, e.num_or("height", 0.0) as u32);
+            let crop = image::imageops::crop_imm(&rgba, x, y, w.min(rgba.width() - x), h.min(rgba.height() - y)).to_image();
+            let want = e.str("qrData").filter(|s| !s.is_empty()).unwrap_or("123456789");
+            total += 1;
+            // like a camera would, look at it enlarged and smoothed
+            let big = image::imageops::resize(&crop, crop.width() * 5, crop.height() * 5, FilterType::CatmullRom);
+            let got = decode_qr(&big);
+            if got.as_deref() == Some(want) {
+                ok += 1;
+            } else {
+                println!("QR scan failed: {} at ({x},{y}) {w}x{h} stored {:?}", f.display(), e.str("qrData"));
+                if let Ok(d) = std::env::var("CARDDECK_DUMP") { crop.save(format!("{d}/qrfail-{x}-{y}.png")).ok(); }
+            }
+        }
+    }
+    if total == 0 {
+        return;
+    }
+    println!("rendered QR codes that scan: {ok}/{total}");
+    assert_eq!(ok, total);
+}
+
+fn pixmap_rgba(r: &carddeck_core::Rendered) -> image::RgbaImage {
+    carddeck_core::render::pixmap_to_rgba(&r.pixmap)
 }

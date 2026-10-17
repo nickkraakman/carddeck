@@ -1,0 +1,25 @@
+[package]
+name = "carddeck"
+version = "0.1.0"
+edition = "2021"
+description = "CardDeck: open Magicard Hub .card files and print them through the Magicard CUPS driver"
+publish = false
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-dialog = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+base64 = "0.22"
+carddeck-core = { path = "../crates/carddeck-core" }
+
+# Standalone: not part of the root workspace (needs system WebKit on Linux).
+[workspace]
+
+[profile.release]
+lto = "thin"
+codegen-units = 4
+strip = true

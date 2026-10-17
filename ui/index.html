@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CardDeck</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header id="toolbar">
+  <button id="btn-open" class="primary">Open…</button>
+  <button id="btn-cal" title="Open a built-in test card for the first test print">Calibration card</button>
+  <div id="meta" class="meta"></div>
+  <div class="spacer"></div>
+  <div class="seg" id="view-seg" role="group" aria-label="View">
+    <button data-view="front" class="on">Front</button>
+    <button data-view="back">Back</button>
+    <button data-view="both">Both</button>
+  </div>
+  <div class="zoom">
+    <button id="zoom-out" title="Zoom out">−</button>
+    <span id="zoom-label">100%</span>
+    <button id="zoom-in" title="Zoom in">+</button>
+    <button id="zoom-fit" title="Fit to window">Fit</button>
+  </div>
+</header>
+
+<main>
+  <section id="viewer">
+    <div id="warnings" class="warnings hidden"></div>
+    <div id="empty" class="empty">
+      <div class="empty-card">
+        <h1>CardDeck</h1>
+        <p>Drop a <code>.card</code> file here, or click <b>Open…</b></p>
+        <p class="small">No file handy? Try the <b>Calibration card</b> to check orientation before your first print.</p>
+      </div>
+    </div>
+    <div id="stage" class="stage hidden"></div>
+    <div id="print-preview" class="print-preview hidden"></div>
+  </section>
+
+  <aside id="panel">
+    <h2>Print</h2>
+
+    <label class="row">Printer
+      <span class="inline">
+        <select id="printer"></select>
+        <button id="printer-refresh" title="Refresh list (lpstat -p)">↻</button>
+      </span>
+    </label>
+    <div id="printer-note" class="note"></div>
+
+    <label class="row">Sides
+      <select id="sides">
+        <option value="both">Both (front + back)</option>
+        <option value="front">Front only</option>
+        <option value="back">Back only</option>
+      </select>
+    </label>
+    <label class="row">Copies <input id="copies" type="number" min="1" max="99" value="1"></label>
+
+    <fieldset>
+      <legend>Overcoat</legend>
+      <label class="check"><input id="oc-front" type="checkbox" checked> Front</label>
+      <label class="check"><input id="oc-back" type="checkbox" checked> Back</label>
+    </fieldset>
+
+    <label class="row">Black
+      <select id="black">
+        <option value="resin">Resin K: pure #000000 → K panel</option>
+        <option value="composite">Composite (YMC, no resin)</option>
+        <option value="mono">Mono K only</option>
+      </select>
+    </label>
+    <label class="check"><input id="nudge" type="checkbox" checked> Keep photo blacks off the resin (0,0,0 → 1,1,1)</label>
+
+    <fieldset>
+      <legend>Orientation <span class="badge">unverified</span></legend>
+      <label class="row">Turn card to portrait page
+        <select id="turn">
+          <option value="ccw">Counter-clockwise (default)</option>
+          <option value="cw">Clockwise</option>
+        </select>
+      </label>
+      <label class="check"><input id="rot-front" type="checkbox"> Rotate front 180°</label>
+      <label class="check"><input id="rot-back" type="checkbox"> Rotate back 180°</label>
+      <label class="row">Fit 642 → 638 px
+        <select id="fit">
+          <option value="crop">Crop 2 px each edge (exact pixels)</option>
+          <option value="stretch">Stretch (whole card)</option>
+        </select>
+      </label>
+    </fieldset>
+
+    <details>
+      <summary>Advanced: extra printer options</summary>
+      <textarea id="extra" rows="3" placeholder="one per line, e.g.&#10;CFRotation=1Rotation&#10;Sharpness=2"></textarea>
+    </details>
+
+    <div class="buttons">
+      <button id="btn-preview">Preview print pages</button>
+      <button id="btn-save">Save job (PDF + PNG)…</button>
+      <button id="btn-print" class="danger">Print…</button>
+    </div>
+    <div id="status" class="status"></div>
+    <div id="problems" class="problems"></div>
+    <details id="cmd-box" class="hidden">
+      <summary>lp command</summary>
+      <pre id="cmd"></pre>
+    </details>
+  </aside>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

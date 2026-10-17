@@ -11,7 +11,8 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use image::{imageops, RgbImage};
+pub use image::{ImageFormat, RgbImage};
+use image::imageops;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
 use crate::fonts::FontSet;
@@ -317,7 +318,7 @@ pub fn save_job(dir: &Path, job: &Job, o: &PrintOptions) -> Result<Vec<PathBuf>,
 // CUPS queries (pure parsing; executing is up to the caller)
 // ---------------------------------------------------------------------------------------------
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Printer {
     pub name: String,
     pub status: String,

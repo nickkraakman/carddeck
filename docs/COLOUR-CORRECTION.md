@@ -6,14 +6,14 @@ settings, saves them back into the same block, and tells the printer driver the 
 
 ## What happens where
 
-| | Preview in the app | Print job |
+| | On screen | Print from the app |
 |---|---|---|
-| Colour Correct mode | corrected on screen | sent as PPD option `ColourCorrection` (table below); the bitmap is **not** corrected |
-| Sliders (B/C/S/R/G/B) | corrected on screen | **preview only**: the driver has no such options; the bitmap is unchanged |
-| Opt-in "apply to printed bitmap" | - | sliders + Gamma 1/2 are baked into the bitmap and the driver gets `ColourCorrection=0` (never both) |
+| Colour Correct, LUT modes (Perceptual, Saturation, Relative, Absolute) | corrected on screen | sent as PPD option `ColourCorrection` (table below); the bitmap is **not** given that table |
+| Colour Correct, Gamma 1 / Gamma 2 | corrected on screen | baked into the bitmap; the driver gets `ColourCorrection=0ColourCorrection` (no double correction) |
+| Sliders (B/C/S/R/G/B) | corrected on screen | baked into the bitmap (the driver has no such options) |
 
-Never pre-correcting the bitmap is deliberate: the driver applies its own table, so a pre-corrected bitmap would be
-corrected twice. The LUT modes are never baked, in any setting.
+The LUT modes are never baked: the driver applies its own table, so a pre-corrected bitmap would be corrected twice.
+The CLI leaves sliders and Gamma unbaked unless you pass `--bake-adjustments` (then it matches the app).
 
 ## Mode to PPD mapping
 
@@ -32,8 +32,9 @@ Values from `pro300.ppd`, `pro300neo.ppd`, `pro360.ppd`, `pro360NEO.ppd` (Magica
 | Absolute Colorimetric | `AbsoluteColorimetric` | `-o ColourCorrection=5ColourCorrection` (PPD default) | MAGIR2X, absolute | yes |
 
 There is no Gamma choice in the driver. Hub's own file converter turns the old `ICC_Internal` value into `Gamma1`,
-so "Driver managed" is the closest analogue; it is not the same curve as the preview. CardDeck shows a warning in
-the print preview for Gamma 1/2, and the "apply to printed bitmap" option prints the preview's curve instead.
+so "Driver managed" is the closest analogue; it is not the same curve as the preview. The app therefore bakes the
+preview's Gamma curve into the bitmap and sends `ColourCorrection=0ColourCorrection`. The CLI only does that with
+`--bake-adjustments`; otherwise it sends Driver managed and warns.
 
 ## How the preview is computed
 

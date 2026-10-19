@@ -5,15 +5,15 @@ This procedure finds the right settings with 3–5 spare cards. Nothing here nee
 
 ## Before printing (no card used)
 
-1. CardDeck → **Calibration card** → **Preview print pages**. You should see two portrait pages: red square bottom-left,
-   a coloured arrow with "TOP" on the left side, text running bottom-to-top.
-2. **Save job (PDF + PNG)…** and open `job.pdf` in Preview: 2 pages, 153×243 pt. `command.txt` has the exact `lp` command.
+1. From the repo: `cargo run -p carddeck-cli --release -- calibrate /tmp/carddeck-cal`. Open the page PNGs: two portrait
+   pages, red square bottom-left, a coloured arrow with "TOP" on the left side, text running bottom-to-top.
+2. Open `job.pdf` in Preview: 2 pages, 153×243 pt. `command.txt` has the exact `lp` command.
 3. Optional, from Terminal, to see what the queue accepts:
    `lpoptions -p <queue> -l | grep -E 'UTDuplex|CF|CB|PageSize'`
 
 ## Print 1: front only
 
-Settings: Sides = Front only, Overcoat = on, Black = Resin K, Orientation = defaults. Print.
+Settings: Sides = Front only. Overcoat is always applied to both sides. Print.
 
 Look at the card with the magnetic stripe side as you would normally hold it (long edge horizontal):
 
@@ -51,12 +51,12 @@ Which table row applied for front and back, whether Stretch/Crop mattered, the b
 
 ## Colour check (optional, 1 card each)
 
-The colour mode goes to the driver as the PPD option `ColourCorrection`; the bitmap is not corrected. Mapping:
+The app sends the colour mode as the PPD option `ColourCorrection`. LUT modes are left to the driver. Gamma 1/2 and the sliders are baked into the bitmap (the driver cannot do them). Mapping for a print from the app:
 
-| CardDeck Colour Correct | `lp` option |
+| CardDeck Colour Correct | What the app sends |
 |---|---|
 | None | `ColourCorrection=0ColourCorrection` |
-| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed: closest, not identical) |
+| Gamma 1 / Gamma 2 | curve baked into the bitmap, then `ColourCorrection=0ColourCorrection` |
 | Perceptual | `ColourCorrection=2ColourCorrection` |
 | Saturation | `ColourCorrection=3ColourCorrection` |
 | Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
@@ -65,7 +65,6 @@ The colour mode goes to the driver as the PPD option `ColourCorrection`; the bit
 1. Check the queue has the choices: `lpoptions -p <queue> -l | grep ColourCorrection` (expect `0ColourCorrection` to `5ColourCorrection`).
 2. Print the same card with **None** and with **Absolute Colorimetric**. White should look slightly warm/off-white and
    greens clearly more saturated in the second; the app's preview of Absolute should look like that print.
-3. Gamma 1/2: the printer gets Driver managed, so the print will not match the (darker) preview exactly. Tick
-   *Also apply sliders + Gamma 1/2 to the printed bitmap* to print the preview's curve instead (driver gets `0ColourCorrection`).
-4. Sliders (Brightness ... Blue) are preview only unless that box is ticked.
-5. The exact command (with `-o ColourCorrection=...`) is in the print preview and in `command.txt` of a saved job.
+3. Gamma 1/2 and the sliders are baked into the bitmap the app sends (the driver has no slider options and no Gamma 1 vs 2).
+   For Gamma the driver gets `ColourCorrection=0ColourCorrection`, so the curve is not applied twice.
+4. A dry-run command (with `-o ColourCorrection=...`) is in `command.txt` from `carddeck job` or `carddeck calibrate`.

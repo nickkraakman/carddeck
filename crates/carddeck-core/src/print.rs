@@ -234,7 +234,7 @@ fn colour_warnings(o: &PrintOptions) -> Vec<String> {
             w.push(format!("{} has no driver option: it is baked into the print bitmap and the driver gets ColourCorrection=None (no double correction).", c.label()));
         } else {
             w.push(format!(
-                "{} has no exact Magicard driver option: the printer gets the closest one, ColourCorrection=Driver managed, so the print will not match the on-screen preview exactly. Tick \"apply to the printed bitmap\" to print the preview's curve instead.",
+                "{} has no exact Magicard driver option: the printer gets the closest one, ColourCorrection=Driver managed, so the print will not match the on-screen preview exactly. Bake the preview curve into the bitmap to print that curve instead (the app always does this; the CLI needs --bake-adjustments).",
                 c.label()
             ));
         }

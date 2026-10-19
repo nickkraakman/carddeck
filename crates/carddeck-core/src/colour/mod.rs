@@ -13,9 +13,10 @@
 //!    * `Perceptual` / `Saturation` / `RelativeColorimetric` / `AbsoluteColorimetric`: the Magicard driver's
 //!      own MAGIR2X colour table ([`lut`], GPL)
 //!
-//! None of this touches the bitmap that is printed (the Magicard driver does the LUT modes itself;
-//! see [`Correction::ppd_choice`]), unless [`crate::print::PrintOptions::bake_non_driver_adjustments`]
-//! is switched on for the parts the driver cannot do.
+//! The LUT modes are not applied to the printed bitmap (the Magicard driver does those itself;
+//! see [`Correction::ppd_choice`]). Sliders and Gamma 1/2 have no driver options: they are written
+//! into the bitmap only when [`crate::print::PrintOptions::bake_adjustments`] is on. The desktop app
+//! always turns that on; the CLI does it with `--bake-adjustments`.
 
 pub mod lut;
 pub mod store;

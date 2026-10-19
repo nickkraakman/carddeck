@@ -62,7 +62,7 @@ lpstat -p
 lpoptions -p <queue> -l | grep -E 'UTDuplex|CFColourFormat|CFBlackResin|CFOverCoat|ColourCorrection|PageSize'
 ```
 
-CardDeck needs those option names. Preview will warn if a chosen queue is not a Magicard driver.
+CardDeck needs those option names. A queue that is not a Magicard driver will reject the options it does not know.
 
 ## Install Minion Pro and Myriad Pro
 
@@ -95,33 +95,33 @@ You can also drop extra font files in `~/Library/Application Support/dev.carddec
 3. Check front/back in the viewer. Warnings at the top mean something was skipped or approximated.
 4. In the Print panel:
    - Choose the Magicard **Printer** (↻ to refresh).
-   - Set **Sides** and **Copies**.
-   - Leave **Overcoat** on unless you intentionally want it off.
-   - Colour is set in the **Colour (preview only)** panel above Print (see below). The chosen Colour Correct mode is sent to the printer as the matching `ColourCorrection` option.
-5. Optional: **Preview print pages** to see the 638×1013 portrait rasters the driver receives, or **Save job (PDF + PNG)…** for a dry run with no printer.
-6. Click **Print…** and confirm. That sends `lp` with the Magicard PPD options (uses a blank card + ribbon).
+   - Set **Sides** and **Copies**. Overcoat is always applied to both sides.
+   - Colour is set in the **Colour** panel above Print (see below). The chosen Colour Correct mode is sent to the printer as the matching `ColourCorrection` option. Sliders and Gamma 1/2 are applied to the printed bitmap as well.
+5. Click **Print…** and confirm. That sends `lp` with the Magicard PPD options (uses a blank card + ribbon).
+   A dry run without the app: `carddeck job my.card out/job` writes `job.pdf`, page PNGs and `command.txt`.
 
 ### Colour correction
 
-The **Colour (preview only)** panel has Hub's **Colour Correct** drop-down (None, Gamma 1, Gamma 2, Absolute / Relative
+The **Colour** panel has Hub's **Colour Correct** drop-down (None, Gamma 1, Gamma 2, Absolute / Relative
 Colorimetric, Perceptual, Saturation) and the Brightness / Contrast / Saturation / Red / Green / Blue sliders. They start
 from the card's saved `adjustments`; **Reset** returns to Hub's defaults (Gamma 1, sliders neutral). Changes show in the
-on-screen preview immediately and are saved into the `.card` file's `adjustments` block (untick auto-save to use **Save to .card** instead).
+viewer immediately and are written back into the `.card` file's `adjustments` block. **Saved to file** flashes with the time of each write.
 
-**The printed bitmap is never pre-corrected** (that would correct twice). The Colour Correct mode goes to the driver as a PPD option:
+The Colour Correct mode goes to the driver as a PPD option. Perceptual / Saturation / Relative / Absolute are **not**
+also applied to the bitmap (the driver would correct them twice). Sliders and Gamma 1/2 have no driver options, so the
+app always bakes those into the bitmap; for Gamma the driver then gets `ColourCorrection=0ColourCorrection`.
 
-| Colour Correct | `lp` option |
+| Colour Correct | What the app sends |
 |---|---|
 | None | `ColourCorrection=0ColourCorrection` |
-| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed, closest driver option, not identical) |
+| Gamma 1 / Gamma 2 | curve baked into the bitmap, then `ColourCorrection=0ColourCorrection` |
 | Perceptual | `ColourCorrection=2ColourCorrection` |
 | Saturation | `ColourCorrection=3ColourCorrection` |
 | Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
 | Absolute Colorimetric | `ColourCorrection=5ColourCorrection` |
 
-The sliders have no driver equivalent, so they are preview only unless you tick **Also apply sliders + Gamma 1/2 to the printed bitmap**
-(then Gamma/sliders are baked into the bitmap and the driver gets `0ColourCorrection`). Details, fit method and error numbers:
-[docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md). CLI: `carddeck adjust my.card --correction Perceptual --saturation 1`.
+Details, fit method and error numbers: [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
+CLI: `carddeck adjust my.card --correction Perceptual --saturation 1`. A CLI print matches the app's bake only with `--bake-adjustments`.
 
 First hardware run: use **Calibration card** and the checklist in [docs/TEST-PRINT.md](docs/TEST-PRINT.md).
 
@@ -163,7 +163,7 @@ cargo tauri build --target x86_64-apple-darwin --bundles app,dmg   # Intel build
 * Unsigned / not notarized — see Gatekeeper steps above.
 * Raster page orientation defaults are derived from the public driver; calibrate once on real hardware ([docs/TEST-PRINT.md](docs/TEST-PRINT.md)).
 * Font substitutes change text metrics vs Hub unless Myriad Pro / Minion Pro are installed.
-* Colour: the preview of Perceptual / Saturation / Relative / Absolute is exact (the driver’s own table); **Gamma 1/2 are fitted approximations** of Hub, and print as the driver’s closest option (Driver managed). The sliders are preview only (optional bake into the print bitmap). Hub’s sharpen is not reproduced. See [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
+* Colour: the preview of Perceptual / Saturation / Relative / Absolute is exact (the driver’s own table) and that table is applied by the driver at print time. **Gamma 1/2 are fitted approximations** of Hub and are baked into the printed bitmap. Sliders are baked in too (the driver has no slider options); that can move pure black off `#000000`, so resin K may not catch it. Hub’s sharpen is not reproduced. See [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
 * Not handled: variable data, barcode regeneration, HoloKote / HoloPatch / mag / chip cut-outs, dark-card specifics, non-CR80 page sizes for printing.
 
 ## Legal / provenance

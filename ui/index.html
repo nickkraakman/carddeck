@@ -36,11 +36,10 @@
       </div>
     </div>
     <div id="stage" class="stage hidden"></div>
-    <div id="print-preview" class="print-preview hidden"></div>
   </section>
 
   <aside id="panel">
-    <h2>Colour <span class="badge info">preview only</span></h2>
+    <h2>Colour</h2>
     <div id="colour-box">
       <label class="row">Colour Correct
         <select id="cc-correction"></select>
@@ -52,9 +51,7 @@
       <div class="slider"><label for="cc-red">Red</label><input id="cc-red" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-red-v"></output></div>
       <div class="slider"><label for="cc-green">Green</label><input id="cc-green" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-green-v"></output></div>
       <div class="slider"><label for="cc-blue">Blue</label><input id="cc-blue" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-blue-v"></output></div>
-      <label class="check"><input id="cc-autosave" type="checkbox" checked> Save into the .card file when I change something</label>
-      <div class="inline"><button id="cc-save">Save to .card</button><span id="cc-state" class="note"></span></div>
-      <div id="cc-note" class="note"></div>
+      <div id="cc-state" class="note save-state" aria-live="polite"></div>
     </div>
 
     <h2>Print</h2>
@@ -76,30 +73,15 @@
     </label>
     <label class="row">Copies <input id="copies" type="number" min="1" max="99" value="1"></label>
 
-    <fieldset>
-      <legend>Overcoat</legend>
-      <label class="check"><input id="oc-front" type="checkbox" checked> Front</label>
-      <label class="check"><input id="oc-back" type="checkbox" checked> Back</label>
-    </fieldset>
-
-    <label class="check" title="The driver cannot do Brightness/Contrast/Saturation/RGB or Gamma 1/2. Off: they only change the preview."><input id="bake" type="checkbox"> Also apply sliders + Gamma 1/2 to the printed bitmap</label>
-
     <details>
       <summary>Advanced: extra printer options</summary>
       <textarea id="extra" rows="3" placeholder="one per line, e.g.&#10;CFRotation=1Rotation&#10;Sharpness=2"></textarea>
     </details>
 
     <div class="buttons">
-      <button id="btn-preview">Preview print pages</button>
-      <button id="btn-save">Save job (PDF + PNG)…</button>
       <button id="btn-print" class="danger">Print…</button>
     </div>
     <div id="status" class="status"></div>
-    <div id="problems" class="problems"></div>
-    <details id="cmd-box" class="hidden">
-      <summary>lp command</summary>
-      <pre id="cmd"></pre>
-    </details>
   </aside>
 </main>
 <script src="app.js"></script>

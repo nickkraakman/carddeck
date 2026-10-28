@@ -13,9 +13,13 @@
 //!    * `Perceptual` / `Saturation` / `RelativeColorimetric` / `AbsoluteColorimetric`: the Magicard driver's
 //!      own MAGIR2X colour table ([`lut`], GPL)
 //!
-//! None of this touches the bitmap that is printed (the Magicard driver does the LUT modes itself;
-//! see [`Correction::ppd_choice`]), unless [`crate::print::PrintOptions::bake_non_driver_adjustments`]
-//! is switched on for the parts the driver cannot do.
+//! The LUT modes and Gamma 1/2 are not applied to the printed bitmap. The driver does the LUT
+//! modes itself ([`Correction::ppd_choice`]). Gamma has no driver curve of its own; baking the
+//! on-screen fit and sending `ColourCorrection=None` printed light, washed-out cards, because the
+//! 300 driver then skips its colour match. Gamma prints as Driver managed instead. Sliders have no
+//! driver options: they are written into the bitmap only when
+//! [`crate::print::PrintOptions::bake_adjustments`] is on. The desktop app always turns that on;
+//! the CLI does it with `--bake-adjustments`.
 
 pub mod lut;
 pub mod store;
@@ -107,8 +111,9 @@ impl Correction {
     /// `Gamma1`/`Gamma2` have **no exact driver equivalent**. They map to `1ColourCorrection`
     /// (Driver managed): that is the driver's own internal correction, and Hub's file converter turns
     /// the old `ICC_Internal` value into `Gamma1`, so it is the closest analogue. It is *not* the same
-    /// curve as the Gamma preview ([`Correction::has_driver_equivalent`] is false). When the Gamma
-    /// is baked into the print bitmap instead, [`Correction::ppd_choice_when_baked`] sends None.
+    /// curve as the Gamma preview ([`Correction::has_driver_equivalent`] is false). Do not bake that
+    /// preview curve and send None: on a 300 the driver then applies no colour match and the card
+    /// prints light and washed out. Gamma 1 and Gamma 2 share this one driver option.
     pub fn ppd_choice(self) -> &'static str {
         match self {
             Correction::None => "0ColourCorrection",
@@ -117,15 +122,6 @@ impl Correction {
             Correction::Saturation => "3ColourCorrection",
             Correction::RelativeColorimetric => "4ColourCorrection",
             Correction::AbsoluteColorimetric => "5ColourCorrection",
-        }
-    }
-
-    /// The choice to send when Gamma 1/2 have already been applied to the print bitmap (opt-in bake):
-    /// the driver must then do nothing, otherwise the correction would be applied twice.
-    pub fn ppd_choice_when_baked(self) -> &'static str {
-        match self {
-            Correction::Gamma1 | Correction::Gamma2 => "0ColourCorrection",
-            other => other.ppd_choice(),
         }
     }
 
@@ -270,7 +266,8 @@ fn q(v: f64) -> f64 {
 pub enum Stages {
     /// Sliders + the selected correction (what the preview shows).
     Preview,
-    /// Sliders + Gamma 1/2 only; the LUT modes are left to the driver. Used by the opt-in print bake.
+    /// Sliders only. Gamma and the LUT modes are left to the driver: baking the Gamma preview and
+    /// sending `ColourCorrection=None` printed light, washed-out cards.
     NonDriver,
 }
 
@@ -280,7 +277,10 @@ pub fn apply_to_buffer(buf: &mut [u8], stride: usize, adj: &Adjustments, stages:
     debug_assert!(stride == 3 || stride == 4);
     let adj = adj.clamped();
     let sliders = !adj.sliders_neutral();
-    let gamma = gamma_table(adj.correction);
+    let gamma = match stages {
+        Stages::Preview => gamma_table(adj.correction),
+        Stages::NonDriver => None,
+    };
     let intent = match stages {
         Stages::Preview => adj.correction.intent(),
         Stages::NonDriver => None,

@@ -6,14 +6,15 @@ settings, saves them back into the same block, and tells the printer driver the 
 
 ## What happens where
 
-| | Preview in the app | Print job |
+| | On screen | Print from the app |
 |---|---|---|
-| Colour Correct mode | corrected on screen | sent as PPD option `ColourCorrection` (table below); the bitmap is **not** corrected |
-| Sliders (B/C/S/R/G/B) | corrected on screen | **preview only**: the driver has no such options; the bitmap is unchanged |
-| Opt-in "apply to printed bitmap" | - | sliders + Gamma 1/2 are baked into the bitmap and the driver gets `ColourCorrection=0` (never both) |
+| Colour Correct, LUT modes (Perceptual, Saturation, Relative, Absolute) | corrected on screen | sent as PPD option `ColourCorrection` (table below); the bitmap is **not** given that table |
+| Colour Correct, Gamma 1 / Gamma 2 | corrected on screen | **not** baked. The driver gets `ColourCorrection=1ColourCorrection` (Driver managed). Baking the preview curve and sending None printed light, washed-out cards |
+| Sliders (B/C/S/R/G/B) | corrected on screen | baked into the bitmap (the driver has no such options), then the driver still applies the Colour Correct mode above |
 
-Never pre-correcting the bitmap is deliberate: the driver applies its own table, so a pre-corrected bitmap would be
-corrected twice. The LUT modes are never baked, in any setting.
+The LUT modes are never baked: the driver applies its own table, so a pre-corrected bitmap would be corrected twice.
+Gamma is not baked either. On a Magicard 300, `ColourCorrection=None` makes the driver skip its colour match, and a card printed that way (Gamma 2, compared with Hub) came out light and washed out. Driver managed is the option the driver actually colour-matches with. Gamma 1 and Gamma 2 share it; only the on-screen preview differs.
+The CLI leaves sliders unbaked unless you pass `--bake-adjustments` (then it matches the app).
 
 ## Mode to PPD mapping
 
@@ -32,8 +33,9 @@ Values from `pro300.ppd`, `pro300neo.ppd`, `pro360.ppd`, `pro360NEO.ppd` (Magica
 | Absolute Colorimetric | `AbsoluteColorimetric` | `-o ColourCorrection=5ColourCorrection` (PPD default) | MAGIR2X, absolute | yes |
 
 There is no Gamma choice in the driver. Hub's own file converter turns the old `ICC_Internal` value into `Gamma1`,
-so "Driver managed" is the closest analogue; it is not the same curve as the preview. CardDeck shows a warning in
-the print preview for Gamma 1/2, and the "apply to printed bitmap" option prints the preview's curve instead.
+so "Driver managed" is the closest analogue; it is not the same curve as the preview. The app sends that option
+and does not bake the preview curve. A print that baked the curve and sent `ColourCorrection=0ColourCorrection`
+was light and washed out next to the same card printed from Hub with Gamma 2.
 
 ## How the preview is computed
 

@@ -172,26 +172,32 @@ fn bake_is_opt_in_and_only_does_what_the_driver_cannot() {
     let fonts = FontSet::system();
     let card = Card::parse(card_text(None).as_bytes()).unwrap();
     let find = |job: &Job, c: [u8; 3]| job.pages[0].rgb.pixels().any(|p| p.0 == c);
-    // Gamma 1 baked: the teal swatch is darker, white stays white.
-    let adj = Adjustments { correction: Correction::Gamma1, ..Adjustments::identity() };
+    let cc = |o: &PrintOptions| ppd_options(o).into_iter().find(|(k, _)| k == "ColourCorrection").unwrap().1;
+    // Gamma is never baked, even with bake on: the driver must still colour-match.
+    // Baking it and sending None printed light, washed-out cards.
+    let adj = Adjustments { correction: Correction::Gamma2, ..Adjustments::identity() };
     let mut o = PrintOptions { sides: Sides::Front, ..Default::default() };
     o.use_colour(&adj, true);
     let job = build_job(&card, &fonts, &o).unwrap();
-    assert!(!find(&job, [0x01, 0x8d, 0x8c]));
-    assert!(find(&job, colour::correct_pixel([0x01, 0x8d, 0x8c], &adj)));
+    assert!(find(&job, [0x01, 0x8d, 0x8c]), "gamma must not be baked");
     assert!(find(&job, [255, 255, 255]));
     assert!(find(&job, [0, 0, 0]));
-    let cc = |o: &PrintOptions| ppd_options(o).into_iter().find(|(k, _)| k == "ColourCorrection").unwrap().1;
-    assert_eq!(cc(&o), "0ColourCorrection", "driver gets None, so nothing is corrected twice");
-    o.use_colour(&adj, false);
-    assert_eq!(cc(&o), "1ColourCorrection", "not baked: the driver's closest option (Driver managed)");
+    assert_eq!(cc(&o), "1ColourCorrection");
+    // Sliders are baked, and the driver option stays Driver managed.
+    let adj = Adjustments { correction: Correction::Gamma2, brightness: -0.1, ..Adjustments::identity() };
     o.use_colour(&adj, true);
+    let job = build_job(&card, &fonts, &o).unwrap();
+    let sliders_only = Adjustments { correction: Correction::None, brightness: -0.1, ..Adjustments::identity() };
+    assert!(find(&job, colour::correct_pixel([255, 255, 255], &sliders_only)));
+    assert!(!find(&job, colour::correct_pixel([255, 255, 255], &adj)), "gamma must not be applied on top of the sliders");
+    assert_eq!(cc(&o), "1ColourCorrection");
     // LUT modes are never baked, even with bake on.
     let adj = Adjustments { correction: Correction::AbsoluteColorimetric, ..Adjustments::identity() };
     o.use_colour(&adj, true);
     let job = build_job(&card, &fonts, &o).unwrap();
     assert!(find(&job, [0x01, 0x8d, 0x8c]));
     assert!(find(&job, [255, 255, 255]));
+    assert_eq!(cc(&o), "5ColourCorrection");
 }
 
 #[test]
@@ -240,7 +246,7 @@ fn warnings_explain_gamma_and_sliders() {
     let mut o = PrintOptions { sides: Sides::Front, ..Default::default() };
     o.use_colour(&Adjustments { correction: Correction::Gamma1, red: 1.2, ..Adjustments::identity() }, false);
     let w = build_job(&card, &fonts, &o).unwrap().warnings.join("\n");
-    assert!(w.contains("Gamma 1 has no exact Magicard driver option"), "{w}");
+    assert!(w.contains("Gamma 1 has no driver curve"), "{w}");
     assert!(w.contains("sliders are preview only"), "{w}");
     o.use_colour(&Adjustments { correction: Correction::Perceptual, ..Adjustments::identity() }, false);
     assert!(build_job(&card, &fonts, &o).unwrap().warnings.iter().all(|w| !w.contains("Gamma")));

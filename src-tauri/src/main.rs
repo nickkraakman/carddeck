@@ -135,7 +135,7 @@ struct CorrectionOption {
     label: &'static str,
     /// PPD choice the printer gets for this mode.
     driver_choice: &'static str,
-    /// False for Gamma 1/2: no driver equivalent, preview only.
+    /// False for Gamma 1/2: no exact driver option. The print sends Driver managed and does not bake the curve.
     driver_exact: bool,
 }
 
@@ -146,7 +146,7 @@ fn correction_options() -> Vec<CorrectionOption> {
         .collect()
 }
 
-/// PNGs of both sides with the given colour settings applied (preview only).
+/// PNGs of both sides with the given colour settings applied.
 #[derive(Serialize)]
 struct Previews {
     front: String,
@@ -234,7 +234,7 @@ async fn open_calibration(app: tauri::AppHandle, state: State<'_, AppState>) -> 
     Ok(view)
 }
 
-// ---- colour correction (preview only) -----------------------------------------------------------
+// ---- colour correction --------------------------------------------------------------------------
 
 #[derive(Serialize)]
 struct AdjustResult {
@@ -277,13 +277,6 @@ async fn set_adjustments(state: State<'_, AppState>, adj: AdjustmentsDto, save: 
     .map_err(|e| e.to_string())?
 }
 
-/// "Save" button: writes the current colour settings into the .card file.
-#[tauri::command]
-async fn save_adjustments(state: State<'_, AppState>) -> Result<(), String> {
-    let loaded = current(&state)?;
-    tauri::async_runtime::spawn_blocking(move || write_to_file(&loaded)).await.map_err(|e| e.to_string())?
-}
-
 #[tauri::command]
 fn take_pending_open(state: State<'_, AppState>) -> Vec<String> {
     std::mem::take(&mut *state.pending.lock().unwrap())
@@ -297,10 +290,6 @@ struct JobOpts {
     printer: Option<String>,
     sides: String,
     copies: u32,
-    overcoat_front: bool,
-    overcoat_back: bool,
-    /// Also bake the sliders and Gamma 1/2 into the print bitmap (the driver cannot do them). Default off.
-    bake_adjustments: bool,
     /// `NAME=VALUE` lines
     extra: Vec<String>,
 }
@@ -311,9 +300,6 @@ impl Default for JobOpts {
             printer: None,
             sides: "both".into(),
             copies: 1,
-            overcoat_front: true,
-            overcoat_back: true,
-            bake_adjustments: false,
             extra: Vec::new(),
         }
     }
@@ -329,9 +315,8 @@ impl JobOpts {
                 _ => Sides::Both,
             },
             copies: self.copies.clamp(1, 99),
-            overcoat_front: self.overcoat_front,
-            overcoat_back: self.overcoat_back,
-            // Orientation / black / photo-nudge stay on the sensible defaults in PrintOptions.
+            // Overcoat is always on for both sides. Orientation / black / photo-nudge stay on the
+            // sensible defaults in PrintOptions.
             ..PrintOptions::default()
         };
         for line in &self.extra {
@@ -345,91 +330,20 @@ impl JobOpts {
     }
 }
 
-#[derive(Serialize)]
-struct PagePreview {
-    label: String,
-    png: String,
-}
-
-#[derive(Serialize)]
-struct JobPreview {
-    pages: Vec<PagePreview>,
-    command: String,
-    warnings: Vec<String>,
-    problems: Vec<String>,
-}
-
 fn current(state: &AppState) -> Result<Arc<Loaded>, String> {
     state.current.lock().unwrap().clone().ok_or_else(|| "Open a .card file first".to_string())
-}
-
-fn load_ppd(printer: &str) -> Result<std::collections::BTreeMap<String, PpdOption>, String> {
-    match Command::new("lpoptions").args(["-p", printer, "-l"]).output() {
-        Ok(out) if out.status.success() => Ok(parse_lpoptions(&String::from_utf8_lossy(&out.stdout))),
-        Ok(out) => Err(format!("lpoptions failed: {}", String::from_utf8_lossy(&out.stderr).trim())),
-        Err(e) => Err(format!("Could not run lpoptions: {e}")),
-    }
-}
-
-fn ppd_problems(o: &PrintOptions) -> Vec<String> {
-    let Some(p) = &o.printer else { return vec![] };
-    match load_ppd(p) {
-        Ok(ppd) => validate_against_ppd(o, &ppd),
-        Err(e) => vec![e],
-    }
 }
 
 fn build(app: &tauri::AppHandle, state: &AppState, opts: &JobOpts) -> Result<(Job, PrintOptions), String> {
     let loaded = current(state)?;
     let f = fonts(app, state);
     let mut o = opts.to_options();
-    // The driver does the colour correction: send the matching PPD option, never pre-correct the bitmap
-    // (except the opt-in bake of what the driver cannot do).
+    // Sliders have no driver options, so they are baked into the bitmap. Gamma is not: baking it and
+    // sending ColourCorrection=None printed light, washed-out cards. The driver gets Driver managed.
     let adj = *loaded.adj.lock().unwrap();
-    o.use_colour(&adj, opts.bake_adjustments);
+    o.use_colour(&adj, true);
     let job = build_job(&loaded.card, &f, &o).map_err(|e| e.to_string())?;
     Ok((job, o))
-}
-
-#[tauri::command]
-async fn preview_job(app: tauri::AppHandle, opts: JobOpts) -> Result<JobPreview, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let (job, o) = build(&app, &state, &opts)?;
-        let pages = job
-            .pages
-            .iter()
-            .take(2)
-            .map(|p| {
-                let mut png = Vec::new();
-                image_png(&p.rgb, &mut png);
-                PagePreview { label: p.label.to_string(), png: data_url(&png) }
-            })
-            .collect();
-        let command = lp_command_line(std::path::Path::new("<job.pdf>"), &o);
-        Ok(JobPreview { pages, command, warnings: job.warnings.clone(), problems: ppd_problems(&o) })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-fn image_png(rgb: &carddeck_core::print::RgbImage, out: &mut Vec<u8>) {
-    rgb.write_to(&mut std::io::Cursor::new(out), carddeck_core::print::ImageFormat::Png).ok();
-}
-
-#[tauri::command]
-async fn save_job(app: tauri::AppHandle, opts: JobOpts, dir: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let (job, o) = build(&app, &state, &opts)?;
-        let stem = current(&state)?.name.trim_end_matches(".card").replace(['/', '\\', ':'], "_");
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let target = PathBuf::from(dir).join(format!("{stem}-job-{stamp}"));
-        let files = carddeck_core::print::save_job(&target, &job, &o).map_err(|e| e.to_string())?;
-        Ok(files.into_iter().map(|p| p.display().to_string()).collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -497,7 +411,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![open_card, open_calibration, take_pending_open, preview_job, save_job, print_job, list_printers, set_adjustments, save_adjustments])
+        .invoke_handler(tauri::generate_handler![open_card, open_calibration, take_pending_open, print_job, list_printers, set_adjustments])
         .build(tauri::generate_context!())
         .expect("error while building CardDeck");
     app.run(|handle, event| {

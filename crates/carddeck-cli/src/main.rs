@@ -33,7 +33,7 @@ JOB/PRINT OPTIONS:
                               `adjustments`); NAME = None Gamma1 Gamma2 Perceptual Saturation
                               RelativeColorimetric AbsoluteColorimetric. Sent as PPD option ColourCorrection.
   --no-correction-option      send no ColourCorrection option (driver default)
-  --bake-adjustments          bake sliders + Gamma 1/2 into the print bitmap (the app always does this; the CLI does not unless this flag is set)
+  --bake-adjustments          bake the sliders into the print bitmap (the app always does this; the CLI does not unless this flag is set). Gamma is left to the driver.
   -d <printer>                CUPS queue name
 ";
 
@@ -220,7 +220,7 @@ fn run(args: &[String]) -> Result<(), String> {
             } else {
                 println!("{}{}", describe(&a), if card.has_adjustments { "" } else { "   (file has no adjustments block: Hub default)" });
                 println!("driver option for printing: ColourCorrection={}{}", a.correction.ppd_choice(),
-                    if a.correction.has_driver_equivalent() { "" } else { "   (no exact driver option: the app bakes this curve; CLI prints need --bake-adjustments)" });
+                    if a.correction.has_driver_equivalent() { "" } else { "   (no driver curve: print sends Driver managed, same for Gamma 1 and Gamma 2)" });
             }
             Ok(())
         }

@@ -96,7 +96,7 @@ You can also drop extra font files in `~/Library/Application Support/dev.carddec
 4. In the Print panel:
    - Choose the Magicard **Printer** (↻ to refresh).
    - Set **Sides** and **Copies**. Overcoat is always applied to both sides.
-   - Colour is set in the **Colour** panel above Print (see below). The chosen Colour Correct mode is sent to the printer as the matching `ColourCorrection` option. Sliders and Gamma 1/2 are applied to the printed bitmap as well.
+   - Colour is set in the **Colour** panel above Print (see below). The chosen Colour Correct mode is sent to the printer as the matching `ColourCorrection` option. Sliders are applied to the printed bitmap as well. Gamma is not: the driver colour-matches it.
 5. Click **Print…** and confirm. That sends `lp` with the Magicard PPD options (uses a blank card + ribbon).
    A dry run without the app: `carddeck job my.card out/job` writes `job.pdf`, page PNGs and `command.txt`.
 
@@ -108,13 +108,14 @@ from the card's saved `adjustments`; **Reset** returns to Hub's defaults (Gamma 
 viewer immediately and are written back into the `.card` file's `adjustments` block. **Saved to file** flashes with the time of each write.
 
 The Colour Correct mode goes to the driver as a PPD option. Perceptual / Saturation / Relative / Absolute are **not**
-also applied to the bitmap (the driver would correct them twice). Sliders and Gamma 1/2 have no driver options, so the
-app always bakes those into the bitmap; for Gamma the driver then gets `ColourCorrection=0ColourCorrection`.
+also applied to the bitmap (the driver would correct them twice). Gamma 1/2 are not baked either: doing that and
+sending `ColourCorrection=None` printed light, washed-out cards. They both send Driver managed, and the driver
+colour-matches. Sliders have no driver options, so the app always bakes those into the bitmap first.
 
 | Colour Correct | What the app sends |
 |---|---|
 | None | `ColourCorrection=0ColourCorrection` |
-| Gamma 1 / Gamma 2 | curve baked into the bitmap, then `ColourCorrection=0ColourCorrection` |
+| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed; the bitmap is not pre-corrected) |
 | Perceptual | `ColourCorrection=2ColourCorrection` |
 | Saturation | `ColourCorrection=3ColourCorrection` |
 | Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
@@ -163,7 +164,7 @@ cargo tauri build --target x86_64-apple-darwin --bundles app,dmg   # Intel build
 * Unsigned / not notarized — see Gatekeeper steps above.
 * Raster page orientation defaults are derived from the public driver; calibrate once on real hardware ([docs/TEST-PRINT.md](docs/TEST-PRINT.md)).
 * Font substitutes change text metrics vs Hub unless Myriad Pro / Minion Pro are installed.
-* Colour: the preview of Perceptual / Saturation / Relative / Absolute is exact (the driver’s own table) and that table is applied by the driver at print time. **Gamma 1/2 are fitted approximations** of Hub and are baked into the printed bitmap. Sliders are baked in too (the driver has no slider options); that can move pure black off `#000000`, so resin K may not catch it. Hub’s sharpen is not reproduced. See [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
+* Colour: the preview of Perceptual / Saturation / Relative / Absolute is exact (the driver’s own table) and that table is applied by the driver at print time. **Gamma 1/2 are fitted approximations** of Hub’s screen, and the print uses the driver’s Driver managed profile instead (baking the screen curve and turning the driver off printed light, washed-out cards). Gamma 1 and Gamma 2 therefore print the same. Sliders are baked in (the driver has no slider options); that can move pure black off `#000000`, so resin K may not catch it. Hub’s sharpen is not reproduced. See [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
 * Not handled: variable data, barcode regeneration, HoloKote / HoloPatch / mag / chip cut-outs, dark-card specifics, non-CR80 page sizes for printing.
 
 ## Legal / provenance

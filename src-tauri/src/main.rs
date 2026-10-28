@@ -135,7 +135,7 @@ struct CorrectionOption {
     label: &'static str,
     /// PPD choice the printer gets for this mode.
     driver_choice: &'static str,
-    /// False for Gamma 1/2: no exact driver option (the app bakes that curve into the bitmap).
+    /// False for Gamma 1/2: no exact driver option. The print sends Driver managed and does not bake the curve.
     driver_exact: bool,
 }
 
@@ -338,9 +338,8 @@ fn build(app: &tauri::AppHandle, state: &AppState, opts: &JobOpts) -> Result<(Jo
     let loaded = current(state)?;
     let f = fonts(app, state);
     let mut o = opts.to_options();
-    // Colour Correct modes the driver understands are sent as ColourCorrection. Sliders and Gamma 1/2
-    // have no driver options, so they are always baked into the bitmap (LUT modes are not, or the
-    // driver would correct them a second time).
+    // Sliders have no driver options, so they are baked into the bitmap. Gamma is not: baking it and
+    // sending ColourCorrection=None printed light, washed-out cards. The driver gets Driver managed.
     let adj = *loaded.adj.lock().unwrap();
     o.use_colour(&adj, true);
     let job = build_job(&loaded.card, &f, &o).map_err(|e| e.to_string())?;

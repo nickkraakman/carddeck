@@ -51,12 +51,12 @@ Which table row applied for front and back, whether Stretch/Crop mattered, the b
 
 ## Colour check (optional, 1 card each)
 
-The app sends the colour mode as the PPD option `ColourCorrection`. LUT modes are left to the driver. Gamma 1/2 and the sliders are baked into the bitmap (the driver cannot do them). Mapping for a print from the app:
+The app sends the colour mode as the PPD option `ColourCorrection`. LUT modes and Gamma are left to the driver. Sliders are baked into the bitmap (the driver cannot do them). Mapping for a print from the app:
 
 | CardDeck Colour Correct | What the app sends |
 |---|---|
 | None | `ColourCorrection=0ColourCorrection` |
-| Gamma 1 / Gamma 2 | curve baked into the bitmap, then `ColourCorrection=0ColourCorrection` |
+| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed; bitmap not pre-corrected) |
 | Perceptual | `ColourCorrection=2ColourCorrection` |
 | Saturation | `ColourCorrection=3ColourCorrection` |
 | Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
@@ -65,6 +65,5 @@ The app sends the colour mode as the PPD option `ColourCorrection`. LUT modes ar
 1. Check the queue has the choices: `lpoptions -p <queue> -l | grep ColourCorrection` (expect `0ColourCorrection` to `5ColourCorrection`).
 2. Print the same card with **None** and with **Absolute Colorimetric**. White should look slightly warm/off-white and
    greens clearly more saturated in the second; the app's preview of Absolute should look like that print.
-3. Gamma 1/2 and the sliders are baked into the bitmap the app sends (the driver has no slider options and no Gamma 1 vs 2).
-   For Gamma the driver gets `ColourCorrection=0ColourCorrection`, so the curve is not applied twice.
+3. Gamma 1/2 are not baked into the bitmap. Baking the on-screen curve and sending `ColourCorrection=None` printed light, washed-out colour next to Hub. The driver gets Driver managed for both, so a Gamma 1 print and a Gamma 2 print from CardDeck match each other and will not match the on-screen preview exactly. Sliders are baked (the driver has no slider options).
 4. A dry-run command (with `-o ColourCorrection=...`) is in `command.txt` from `carddeck job` or `carddeck calibrate`.

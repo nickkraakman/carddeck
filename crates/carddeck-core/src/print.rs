@@ -93,14 +93,15 @@ pub struct PrintOptions {
     pub colour_correction: Option<Correction>,
     /// The card's current colour settings (sliders + mode), used for warnings and the optional bake.
     pub adjustments: Option<Adjustments>,
-    /// Opt-in: bake the parts the driver cannot do (Brightness/Contrast/Saturation/RGB sliders and
-    /// Gamma 1/2) into the print bitmap. LUT modes are never baked. Default off.
+    /// Opt-in: bake Brightness/Contrast/Saturation/RGB into the print bitmap. The driver has no
+    /// such options. Gamma and the LUT modes are never baked (Gamma + `ColourCorrection=None`
+    /// printed light and washed out). Default off.
     pub bake_adjustments: bool,
 }
 
 impl PrintOptions {
     /// Takes the colour settings of the card: sends the matching driver option, and (if `bake`) also
-    /// bakes the non-driver parts into the bitmap.
+    /// bakes the sliders into the bitmap.
     pub fn use_colour(&mut self, adj: &Adjustments, bake: bool) {
         self.colour_correction = Some(adj.correction);
         self.adjustments = Some(*adj);
@@ -228,19 +229,14 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
 fn colour_warnings(o: &PrintOptions) -> Vec<String> {
     let mut w = Vec::new();
     let Some(c) = o.colour_correction else { return w };
-    let baked = o.bake_adjustments;
     if matches!(c, Correction::Gamma1 | Correction::Gamma2) {
-        if baked {
-            w.push(format!("{} has no driver option: it is baked into the print bitmap and the driver gets ColourCorrection=None (no double correction).", c.label()));
-        } else {
-            w.push(format!(
-                "{} has no exact Magicard driver option: the printer gets the closest one, ColourCorrection=Driver managed, so the print will not match the on-screen preview exactly. Bake the preview curve into the bitmap to print that curve instead (the app always does this; the CLI needs --bake-adjustments).",
-                c.label()
-            ));
-        }
+        w.push(format!(
+            "{} has no driver curve. The bitmap is not pre-corrected. The printer gets ColourCorrection=Driver managed (the same option for Gamma 1 and Gamma 2), so the print will not match the on-screen preview exactly.",
+            c.label()
+        ));
     }
     if o.adjustments.map(|a| !a.sliders_neutral()).unwrap_or(false) {
-        if baked {
+        if o.bake_adjustments {
             w.push("Brightness/Contrast/Saturation/RGB sliders are baked into the print bitmap; pure black text may no longer be exactly #000000 (resin).".into());
         } else {
             w.push("Brightness/Contrast/Saturation/RGB sliders are preview only: the driver has no such options and the print bitmap is not changed.".into());
@@ -307,8 +303,8 @@ pub fn ppd_options(o: &PrintOptions) -> Vec<(String, String)> {
     v.push(("CFOverCoat".into(), if o.overcoat_front { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
     v.push(("CBOverCoat".into(), if o.overcoat_back { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
     if let Some(c) = o.colour_correction {
-        let choice = if o.bake_adjustments && o.adjustments.is_some() { c.ppd_choice_when_baked() } else { c.ppd_choice() };
-        v.push(("ColourCorrection".into(), choice.into()));
+        // Always the driver's own option. Sending None for Gamma skips the 300's colour match.
+        v.push(("ColourCorrection".into(), c.ppd_choice().into()));
     }
     v.push(("print-scaling".into(), "none".into()));
     for (k, val) in &o.extra_options {

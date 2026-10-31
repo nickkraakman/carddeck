@@ -32,14 +32,28 @@
       <div class="empty-card">
         <h1>CardDeck</h1>
         <p>Drop a <code>.card</code> file here, or click <b>Open…</b></p>
-        <p class="small">No file handy? Try the <b>Calibration card</b> to check orientation before your first print.</p>
+        <p class="small">No file handy? Try the <b>Calibration card</b> before your first print.</p>
       </div>
     </div>
     <div id="stage" class="stage hidden"></div>
-    <div id="print-preview" class="print-preview hidden"></div>
   </section>
 
   <aside id="panel">
+    <h2>Colour</h2>
+    <div id="colour-box">
+      <label class="row">Colour Correct
+        <select id="cc-correction"></select>
+      </label>
+      <div class="adj-head"><span>Adjustments</span><button id="cc-reset" title="Reset sliders and Colour Correct to Hub's defaults (Gamma 1)">↻ Reset</button></div>
+      <div class="slider"><label for="cc-brightness">Brightness</label><input id="cc-brightness" type="range" min="-0.5" max="0.5" step="any" value="0"><output id="cc-brightness-v"></output></div>
+      <div class="slider"><label for="cc-contrast">Contrast</label><input id="cc-contrast" type="range" min="-15" max="15" step="any" value="0"><output id="cc-contrast-v"></output></div>
+      <div class="slider"><label for="cc-saturation">Saturation</label><input id="cc-saturation" type="range" min="-5" max="5" step="any" value="0"><output id="cc-saturation-v"></output></div>
+      <div class="slider"><label for="cc-red">Red</label><input id="cc-red" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-red-v"></output></div>
+      <div class="slider"><label for="cc-green">Green</label><input id="cc-green" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-green-v"></output></div>
+      <div class="slider"><label for="cc-blue">Blue</label><input id="cc-blue" type="range" min="0.5" max="1.5" step="any" value="1"><output id="cc-blue-v"></output></div>
+      <div id="cc-state" class="note save-state" aria-live="polite"></div>
+    </div>
+
     <h2>Print</h2>
 
     <label class="row">Printer
@@ -59,55 +73,15 @@
     </label>
     <label class="row">Copies <input id="copies" type="number" min="1" max="99" value="1"></label>
 
-    <fieldset>
-      <legend>Overcoat</legend>
-      <label class="check"><input id="oc-front" type="checkbox" checked> Front</label>
-      <label class="check"><input id="oc-back" type="checkbox" checked> Back</label>
-    </fieldset>
-
-    <label class="row">Black
-      <select id="black">
-        <option value="resin">Resin K: pure #000000 → K panel</option>
-        <option value="composite">Composite (YMC, no resin)</option>
-        <option value="mono">Mono K only</option>
-      </select>
-    </label>
-    <label class="check"><input id="nudge" type="checkbox" checked> Keep photo blacks off the resin (0,0,0 → 1,1,1)</label>
-
-    <fieldset>
-      <legend>Orientation <span class="badge">unverified</span></legend>
-      <label class="row">Turn card to portrait page
-        <select id="turn">
-          <option value="ccw">Counter-clockwise (default)</option>
-          <option value="cw">Clockwise</option>
-        </select>
-      </label>
-      <label class="check"><input id="rot-front" type="checkbox"> Rotate front 180°</label>
-      <label class="check"><input id="rot-back" type="checkbox"> Rotate back 180°</label>
-      <label class="row">Fit 642 → 638 px
-        <select id="fit">
-          <option value="crop">Crop 2 px each edge (exact pixels)</option>
-          <option value="stretch">Stretch (whole card)</option>
-        </select>
-      </label>
-    </fieldset>
-
     <details>
       <summary>Advanced: extra printer options</summary>
       <textarea id="extra" rows="3" placeholder="one per line, e.g.&#10;CFRotation=1Rotation&#10;Sharpness=2"></textarea>
     </details>
 
     <div class="buttons">
-      <button id="btn-preview">Preview print pages</button>
-      <button id="btn-save">Save job (PDF + PNG)…</button>
       <button id="btn-print" class="danger">Print…</button>
     </div>
     <div id="status" class="status"></div>
-    <div id="problems" class="problems"></div>
-    <details id="cmd-box" class="hidden">
-      <summary>lp command</summary>
-      <pre id="cmd"></pre>
-    </details>
   </aside>
 </main>
 <script src="app.js"></script>

@@ -8,9 +8,10 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, OnceLock};
 
 use base64::Engine;
+use carddeck_core::colour::{self, Adjustments, Correction};
 use carddeck_core::fonts::FontSet;
 use carddeck_core::print::*;
-use carddeck_core::{render_side, Card, RenderOptions};
+use carddeck_core::{render_side, Card, RenderOptions, Rendered};
 use serde::{Deserialize, Serialize};
 #[allow(unused_imports)]
 use tauri::Emitter;
@@ -20,6 +21,23 @@ struct Loaded {
     card: Card,
     name: String,
     path: Option<String>,
+    /// Uncorrected renders; the preview colour correction is applied to these on demand.
+    front: Rendered,
+    back: Rendered,
+    /// Current (possibly unsaved) colour settings, and what the file has.
+    adj: Mutex<Adjustments>,
+    saved: Mutex<Adjustments>,
+}
+
+impl Loaded {
+    fn new(app: &tauri::AppHandle, state: &AppState, card: Card, name: String, path: Option<String>) -> Loaded {
+        let f = fonts(app, state);
+        let opts = RenderOptions::default();
+        let front = render_side(&card, false, &f, &opts);
+        let back = render_side(&card, true, &f, &opts);
+        let adj = card.adjustments;
+        Loaded { card, name, path, front, back, adj: Mutex::new(adj), saved: Mutex::new(adj) }
+    }
 }
 
 #[derive(Default)]
@@ -66,13 +84,83 @@ struct CardView {
     front_elements: usize,
     back_elements: usize,
     warnings: Vec<String>,
+    adjustments: AdjustmentsDto,
+    has_adjustments: bool,
+    /// False for the built-in calibration card (no file to save into).
+    can_save: bool,
+    corrections: Vec<CorrectionOption>,
 }
 
-fn view_of(app: &tauri::AppHandle, state: &AppState, loaded: &Loaded) -> CardView {
-    let f = fonts(app, state);
-    let opts = RenderOptions::default();
-    let front = render_side(&loaded.card, false, &f, &opts);
-    let back = render_side(&loaded.card, true, &f, &opts);
+/// Colour settings as the UI sees them (same JSON names as the `.card` file).
+#[derive(Serialize, Deserialize, Clone)]
+struct AdjustmentsDto {
+    correction: String,
+    brightness: f64,
+    contrast: f64,
+    saturation: f64,
+    red: f64,
+    green: f64,
+    blue: f64,
+}
+
+impl AdjustmentsDto {
+    fn from_core(a: &Adjustments) -> Self {
+        AdjustmentsDto {
+            correction: a.correction.json_name().to_string(),
+            brightness: a.brightness,
+            contrast: a.contrast,
+            saturation: a.saturation,
+            red: a.red,
+            green: a.green,
+            blue: a.blue,
+        }
+    }
+    fn to_core(&self) -> Adjustments {
+        Adjustments {
+            correction: Correction::from_json_name(&self.correction).unwrap_or(Correction::Gamma1),
+            brightness: self.brightness,
+            contrast: self.contrast,
+            saturation: self.saturation,
+            red: self.red,
+            green: self.green,
+            blue: self.blue,
+        }
+        .clamped()
+    }
+}
+
+#[derive(Serialize)]
+struct CorrectionOption {
+    id: &'static str,
+    label: &'static str,
+    /// PPD choice the printer gets for this mode.
+    driver_choice: &'static str,
+    /// False for Gamma 1/2: no exact driver option. The print sends Driver managed and does not bake the curve.
+    driver_exact: bool,
+}
+
+fn correction_options() -> Vec<CorrectionOption> {
+    Correction::ALL
+        .iter()
+        .map(|c| CorrectionOption { id: c.json_name(), label: c.label(), driver_choice: c.ppd_choice(), driver_exact: c.has_driver_equivalent() })
+        .collect()
+}
+
+/// PNGs of both sides with the given colour settings applied.
+#[derive(Serialize)]
+struct Previews {
+    front: String,
+    back: String,
+}
+
+fn previews(loaded: &Loaded, adj: &Adjustments) -> Previews {
+    Previews { front: data_url(&loaded.front.to_corrected_png(adj)), back: data_url(&loaded.back.to_corrected_png(adj)) }
+}
+
+fn view_of(_app: &tauri::AppHandle, _state: &AppState, loaded: &Loaded) -> CardView {
+    let front = &loaded.front;
+    let back = &loaded.back;
+    let adj = *loaded.adj.lock().unwrap();
     let mut warnings: Vec<String> = Vec::new();
     for f in &loaded.card.about.features {
         warnings.push(format!("Card has \"{f}\" enabled. CardDeck does not handle it (no cut-out/overcoat holes)."));
@@ -98,8 +186,12 @@ fn view_of(app: &tauri::AppHandle, state: &AppState, loaded: &Loaded) -> CardVie
         double_sided: loaded.card.about.double_sided,
         portrait: loaded.card.about.portrait,
         dark_card: loaded.card.about.dark_card,
-        front: data_url(&front.to_png()),
-        back: data_url(&back.to_png()),
+        front: data_url(&front.to_corrected_png(&adj)),
+        back: data_url(&back.to_corrected_png(&adj)),
+        adjustments: AdjustmentsDto::from_core(&adj),
+        has_adjustments: loaded.card.has_adjustments,
+        can_save: loaded.path.is_some(),
+        corrections: correction_options(),
         front_elements: loaded.card.front.elements.len(),
         back_elements: loaded.card.back.elements.len(),
         warnings,
@@ -114,29 +206,75 @@ async fn open_card(app: tauri::AppHandle, state: State<'_, AppState>, path: Stri
         .map_err(|e| e.to_string())?
         .map_err(|e| e.to_string())?;
     let name = PathBuf::from(&path).file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or(path.clone());
-    let loaded = Arc::new(Loaded { card, name, path: Some(path) });
-    *state.current.lock().unwrap() = Some(loaded.clone());
     let app2 = app.clone();
-    let view = tauri::async_runtime::spawn_blocking(move || {
+    let (loaded, view) = tauri::async_runtime::spawn_blocking(move || {
         let st = app2.state::<AppState>();
-        view_of(&app2, &st, &loaded)
+        let loaded = Arc::new(Loaded::new(&app2, &st, card, name, Some(path)));
+        let view = view_of(&app2, &st, &loaded);
+        (loaded, view)
     })
     .await
     .map_err(|e| e.to_string())?;
+    *state.current.lock().unwrap() = Some(loaded);
     Ok(view)
 }
 
 #[tauri::command]
 async fn open_calibration(app: tauri::AppHandle, state: State<'_, AppState>) -> Result<CardView, String> {
-    let loaded = Arc::new(Loaded { card: carddeck_core::calibration::calibration_card(), name: "Calibration card".into(), path: None });
-    *state.current.lock().unwrap() = Some(loaded.clone());
     let app2 = app.clone();
-    tauri::async_runtime::spawn_blocking(move || {
+    let (loaded, view) = tauri::async_runtime::spawn_blocking(move || {
         let st = app2.state::<AppState>();
-        view_of(&app2, &st, &loaded)
+        let loaded = Arc::new(Loaded::new(&app2, &st, carddeck_core::calibration::calibration_card(), "Calibration card".into(), None));
+        let view = view_of(&app2, &st, &loaded);
+        (loaded, view)
     })
     .await
-    .map_err(|e| e.to_string())
+    .map_err(|e| e.to_string())?;
+    *state.current.lock().unwrap() = Some(loaded);
+    Ok(view)
+}
+
+// ---- colour correction --------------------------------------------------------------------------
+
+#[derive(Serialize)]
+struct AdjustResult {
+    previews: Previews,
+    /// True if the settings are now stored in the .card file.
+    saved: bool,
+    /// Settings differ from the file (and were not saved).
+    dirty: bool,
+}
+
+fn adjust_result(loaded: &Loaded, saved: bool) -> AdjustResult {
+    let adj = *loaded.adj.lock().unwrap();
+    let on_disk = *loaded.saved.lock().unwrap();
+    AdjustResult { previews: previews(loaded, &adj), saved, dirty: adj != on_disk }
+}
+
+fn write_to_file(loaded: &Loaded) -> Result<(), String> {
+    let path = loaded.path.as_ref().ok_or("This card has no file to save into")?;
+    let adj = *loaded.adj.lock().unwrap();
+    colour::store::save_adjustments(std::path::Path::new(path), &adj).map_err(|e| e.to_string())?;
+    *loaded.saved.lock().unwrap() = adj;
+    Ok(())
+}
+
+/// Changes the colour settings; re-renders the preview from the cached uncorrected render. With
+/// `save`, the `adjustments` block of the .card file is updated too (nothing else in the file changes).
+#[tauri::command]
+async fn set_adjustments(state: State<'_, AppState>, adj: AdjustmentsDto, save: bool) -> Result<AdjustResult, String> {
+    let loaded = current(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        *loaded.adj.lock().unwrap() = adj.to_core();
+        let mut saved = false;
+        if save && loaded.path.is_some() {
+            write_to_file(&loaded)?;
+            saved = true;
+        }
+        Ok(adjust_result(&loaded, saved))
+    })
+    .await
+    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -146,22 +284,25 @@ fn take_pending_open(state: State<'_, AppState>) -> Vec<String> {
 
 // ---- printing ---------------------------------------------------------------------------------
 
-#[derive(Deserialize, Default)]
+#[derive(Deserialize)]
 #[serde(default)]
 struct JobOpts {
     printer: Option<String>,
     sides: String,
     copies: u32,
-    turn: String,
-    fit: String,
-    rotate_front_180: bool,
-    rotate_back_180: bool,
-    overcoat_front: bool,
-    overcoat_back: bool,
-    black: String,
-    photo_nudge: bool,
     /// `NAME=VALUE` lines
     extra: Vec<String>,
+}
+
+impl Default for JobOpts {
+    fn default() -> Self {
+        JobOpts {
+            printer: None,
+            sides: "both".into(),
+            copies: 1,
+            extra: Vec::new(),
+        }
+    }
 }
 
 impl JobOpts {
@@ -174,19 +315,9 @@ impl JobOpts {
                 _ => Sides::Both,
             },
             copies: self.copies.clamp(1, 99),
-            turn: if self.turn == "cw" { PageTurn::Cw90 } else { PageTurn::Ccw90 },
-            fit: if self.fit == "stretch" { PageFit::Stretch } else { PageFit::Crop },
-            rotate_front_180: self.rotate_front_180,
-            rotate_back_180: self.rotate_back_180,
-            overcoat_front: self.overcoat_front,
-            overcoat_back: self.overcoat_back,
-            black: match self.black.as_str() {
-                "composite" => BlackMode::CompositeYmc,
-                "mono" => BlackMode::MonoK,
-                _ => BlackMode::ResinK,
-            },
-            prevent_resin_for_images: self.photo_nudge,
-            extra_options: Vec::new(),
+            // Overcoat is always on for both sides. Orientation / black / photo-nudge stay on the
+            // sensible defaults in PrintOptions.
+            ..PrintOptions::default()
         };
         for line in &self.extra {
             if let Some((k, v)) = line.trim().split_once('=') {
@@ -199,83 +330,20 @@ impl JobOpts {
     }
 }
 
-#[derive(Serialize)]
-struct PagePreview {
-    label: String,
-    png: String,
-}
-
-#[derive(Serialize)]
-struct JobPreview {
-    pages: Vec<PagePreview>,
-    command: String,
-    warnings: Vec<String>,
-    problems: Vec<String>,
-}
-
 fn current(state: &AppState) -> Result<Arc<Loaded>, String> {
     state.current.lock().unwrap().clone().ok_or_else(|| "Open a .card file first".to_string())
-}
-
-fn ppd_problems(o: &PrintOptions) -> Vec<String> {
-    let Some(p) = &o.printer else { return vec![] };
-    match Command::new("lpoptions").args(["-p", p, "-l"]).output() {
-        Ok(out) if out.status.success() => {
-            let ppd = parse_lpoptions(&String::from_utf8_lossy(&out.stdout));
-            validate_against_ppd(o, &ppd)
-        }
-        Ok(out) => vec![format!("lpoptions failed: {}", String::from_utf8_lossy(&out.stderr).trim())],
-        Err(e) => vec![format!("Could not run lpoptions: {e}")],
-    }
 }
 
 fn build(app: &tauri::AppHandle, state: &AppState, opts: &JobOpts) -> Result<(Job, PrintOptions), String> {
     let loaded = current(state)?;
     let f = fonts(app, state);
-    let o = opts.to_options();
+    let mut o = opts.to_options();
+    // Sliders have no driver options, so they are baked into the bitmap. Gamma is not: baking it and
+    // sending ColourCorrection=None printed light, washed-out cards. The driver gets Driver managed.
+    let adj = *loaded.adj.lock().unwrap();
+    o.use_colour(&adj, true);
     let job = build_job(&loaded.card, &f, &o).map_err(|e| e.to_string())?;
     Ok((job, o))
-}
-
-#[tauri::command]
-async fn preview_job(app: tauri::AppHandle, opts: JobOpts) -> Result<JobPreview, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let (job, o) = build(&app, &state, &opts)?;
-        let pages = job
-            .pages
-            .iter()
-            .take(2)
-            .map(|p| {
-                let mut png = Vec::new();
-                image_png(&p.rgb, &mut png);
-                PagePreview { label: p.label.to_string(), png: data_url(&png) }
-            })
-            .collect();
-        let command = lp_command_line(std::path::Path::new("<job.pdf>"), &o);
-        Ok(JobPreview { pages, command, warnings: job.warnings.clone(), problems: ppd_problems(&o) })
-    })
-    .await
-    .map_err(|e| e.to_string())?
-}
-
-fn image_png(rgb: &carddeck_core::print::RgbImage, out: &mut Vec<u8>) {
-    rgb.write_to(&mut std::io::Cursor::new(out), carddeck_core::print::ImageFormat::Png).ok();
-}
-
-#[tauri::command]
-async fn save_job(app: tauri::AppHandle, opts: JobOpts, dir: String) -> Result<Vec<String>, String> {
-    tauri::async_runtime::spawn_blocking(move || {
-        let state = app.state::<AppState>();
-        let (job, o) = build(&app, &state, &opts)?;
-        let stem = current(&state)?.name.trim_end_matches(".card").replace(['/', '\\', ':'], "_");
-        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-        let target = PathBuf::from(dir).join(format!("{stem}-job-{stamp}"));
-        let files = carddeck_core::print::save_job(&target, &job, &o).map_err(|e| e.to_string())?;
-        Ok(files.into_iter().map(|p| p.display().to_string()).collect())
-    })
-    .await
-    .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
@@ -288,7 +356,10 @@ async fn print_job(app: tauri::AppHandle, opts: JobOpts) -> Result<String, Strin
         }
         let dir = std::env::temp_dir().join(format!("carddeck-{}", std::process::id()));
         let files = carddeck_core::print::save_job(&dir, &job, &o).map_err(|e| e.to_string())?;
-        let out = Command::new("lp").args(lp_args(&files[0], &o)).output().map_err(|e| format!("Could not run lp: {e}"))?;
+        let out = Command::new("lp")
+            .args(lp_args(&files[0], &o))
+            .output()
+            .map_err(|e| format!("Could not run lp: {e}"))?;
         if out.status.success() {
             Ok(String::from_utf8_lossy(&out.stdout).trim().to_string())
         } else {
@@ -340,7 +411,7 @@ fn main() {
     let app = tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .manage(state)
-        .invoke_handler(tauri::generate_handler![open_card, open_calibration, take_pending_open, preview_job, save_job, print_job, list_printers])
+        .invoke_handler(tauri::generate_handler![open_card, open_calibration, take_pending_open, print_job, list_printers, set_adjustments])
         .build(tauri::generate_context!())
         .expect("error while building CardDeck");
     app.run(|handle, event| {

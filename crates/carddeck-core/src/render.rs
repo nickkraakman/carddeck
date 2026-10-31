@@ -48,13 +48,28 @@ impl Rendered {
         pixmap_to_rgb_over_white(&self.pixmap)
     }
     pub fn to_png(&self) -> Vec<u8> {
-        let mut out = Vec::new();
-        let img = pixmap_to_rgba(&self.pixmap);
-        image::DynamicImage::ImageRgba8(img)
-            .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
-            .expect("png encode");
-        out
+        rgba_to_png(pixmap_to_rgba(&self.pixmap))
     }
+    /// Straight-alpha RGBA of the render with the preview colour correction applied (on-screen only:
+    /// the print path never uses this).
+    pub fn to_corrected_rgba(&self, adj: &crate::colour::Adjustments) -> image::RgbaImage {
+        let mut img = pixmap_to_rgba(&self.pixmap);
+        crate::colour::apply_rgba(&mut img, adj);
+        img
+    }
+    /// PNG of [`Rendered::to_corrected_rgba`].
+    pub fn to_corrected_png(&self, adj: &crate::colour::Adjustments) -> Vec<u8> {
+        rgba_to_png(self.to_corrected_rgba(adj))
+    }
+}
+
+/// Encodes straight-alpha RGBA as PNG.
+pub fn rgba_to_png(img: image::RgbaImage) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .expect("png encode");
+    out
 }
 
 pub fn pixmap_to_rgba(p: &Pixmap) -> image::RgbaImage {

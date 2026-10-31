@@ -15,6 +15,7 @@ pub use image::{ImageFormat, RgbImage};
 use image::imageops;
 use pdf_writer::{Content, Filter, Finish, Name, Pdf, Rect, Ref};
 
+use crate::colour::{self, Adjustments, Correction, Stages};
 use crate::fonts::FontSet;
 use crate::render::{render_side, RenderOptions};
 use crate::{Card, Error};
@@ -86,6 +87,26 @@ pub struct PrintOptions {
     pub prevent_resin_for_images: bool,
     /// Extra raw `-o name=value` pairs (advanced: e.g. `CFRotation=1Rotation`).
     pub extra_options: Vec<(String, String)>,
+    /// Colour correction chosen for the card. It is sent to the driver as the matching PPD option
+    /// `ColourCorrection` (see [`Correction::ppd_choice`]); the print bitmap itself is NOT corrected,
+    /// so the driver is the only one doing it (no double correction). `None` = send no option.
+    pub colour_correction: Option<Correction>,
+    /// The card's current colour settings (sliders + mode), used for warnings and the optional bake.
+    pub adjustments: Option<Adjustments>,
+    /// Opt-in: bake Brightness/Contrast/Saturation/RGB into the print bitmap. The driver has no
+    /// such options. Gamma and the LUT modes are never baked (Gamma + `ColourCorrection=None`
+    /// printed light and washed out). Default off.
+    pub bake_adjustments: bool,
+}
+
+impl PrintOptions {
+    /// Takes the colour settings of the card: sends the matching driver option, and (if `bake`) also
+    /// bakes the sliders into the bitmap.
+    pub fn use_colour(&mut self, adj: &Adjustments, bake: bool) {
+        self.colour_correction = Some(adj.correction);
+        self.adjustments = Some(*adj);
+        self.bake_adjustments = bake;
+    }
 }
 
 impl Default for PrintOptions {
@@ -103,6 +124,9 @@ impl Default for PrintOptions {
             black: BlackMode::ResinK,
             prevent_resin_for_images: true,
             extra_options: Vec::new(),
+            colour_correction: None,
+            adjustments: None,
+            bake_adjustments: false,
         }
     }
 }
@@ -162,10 +186,18 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
     let want_front = matches!(o.sides, Sides::Front | Sides::Both);
     let want_back = matches!(o.sides, Sides::Back | Sides::Both);
     let mut singles: Vec<JobPage> = Vec::new();
+    warnings.extend(colour_warnings(o));
+    let bake = |rgb: &mut RgbImage| {
+        if let (true, Some(adj)) = (o.bake_adjustments, &o.adjustments) {
+            colour::apply_to_buffer(rgb.as_mut(), 3, adj, Stages::NonDriver);
+        }
+    };
     if want_front {
         let r = render_side(card, false, fonts, &ropts);
         warnings.extend(r.warnings.iter().map(|w| format!("front: {w}")));
-        singles.push(JobPage { label: "front", rgb: to_page(card, &r.to_rgb_over_white(), false, o) });
+        let mut rgb = r.to_rgb_over_white();
+        bake(&mut rgb);
+        singles.push(JobPage { label: "front", rgb: to_page(card, &rgb, false, o) });
     }
     if want_back {
         if !card.about.double_sided && o.sides == Sides::Both {
@@ -173,7 +205,9 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
         }
         let r = render_side(card, true, fonts, &ropts);
         warnings.extend(r.warnings.iter().map(|w| format!("back: {w}")));
-        singles.push(JobPage { label: "back", rgb: to_page(card, &r.to_rgb_over_white(), true, o) });
+        let mut rgb = r.to_rgb_over_white();
+        bake(&mut rgb);
+        singles.push(JobPage { label: "back", rgb: to_page(card, &rgb, true, o) });
     }
     if singles.is_empty() {
         return Err(Error::Print("nothing to print".into()));
@@ -189,6 +223,26 @@ pub fn build_job(card: &Card, fonts: &FontSet, o: &PrintOptions) -> Result<Job, 
     warnings.sort();
     warnings.dedup();
     Ok(Job { pages, warnings })
+}
+
+/// Explains what the printer will and will not do about colour for these options.
+fn colour_warnings(o: &PrintOptions) -> Vec<String> {
+    let mut w = Vec::new();
+    let Some(c) = o.colour_correction else { return w };
+    if matches!(c, Correction::Gamma1 | Correction::Gamma2) {
+        w.push(format!(
+            "{} has no driver curve. The bitmap is not pre-corrected. The printer gets ColourCorrection=Driver managed (the same option for Gamma 1 and Gamma 2), so the print will not match the on-screen preview exactly.",
+            c.label()
+        ));
+    }
+    if o.adjustments.map(|a| !a.sliders_neutral()).unwrap_or(false) {
+        if o.bake_adjustments {
+            w.push("Brightness/Contrast/Saturation/RGB sliders are baked into the print bitmap; pure black text may no longer be exactly #000000 (resin).".into());
+        } else {
+            w.push("Brightness/Contrast/Saturation/RGB sliders are preview only: the driver has no such options and the print bitmap is not changed.".into());
+        }
+    }
+    w
 }
 
 /// Lossless PDF: one page per bitmap, page size 153 x 243 pt, image filling the page, DeviceRGB, no interpolation.
@@ -248,6 +302,10 @@ pub fn ppd_options(o: &PrintOptions) -> Vec<(String, String)> {
     }
     v.push(("CFOverCoat".into(), if o.overcoat_front { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
     v.push(("CBOverCoat".into(), if o.overcoat_back { "1PrintOvercoat" } else { "0PrintNoOvercoat" }.into()));
+    if let Some(c) = o.colour_correction {
+        // Always the driver's own option. Sending None for Gamma skips the 300's colour match.
+        v.push(("ColourCorrection".into(), c.ppd_choice().into()));
+    }
     v.push(("print-scaling".into(), "none".into()));
     for (k, val) in &o.extra_options {
         if let Some(slot) = v.iter_mut().find(|(n, _)| n == k) {

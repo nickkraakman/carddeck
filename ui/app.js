@@ -70,7 +70,7 @@ async function loadCard(promise) {
     state.card = c;
     state.fit = true;
     state.userSides = false;
-    $('print-preview').classList.add('hidden');
+    setupColour(c);
     render();
     setStatus(`Opened ${c.name}`, 'ok');
   } catch (e) {
@@ -84,6 +84,86 @@ async function chooseFile() {
   if (p) openPath(Array.isArray(p) ? p[0] : p);
 }
 
+// ---- colour correction ------------------------------------------------------------------------
+
+const SLIDERS = ['brightness', 'contrast', 'saturation', 'red', 'green', 'blue'];
+const SLIDER_DEFAULTS = { brightness: 0, contrast: 0, saturation: 0, red: 1, green: 1, blue: 1 };
+let ccTimer = null;
+let ccBusy = false;
+let ccPending = null;
+
+function currentAdjustments() {
+  const a = { correction: $('cc-correction').value };
+  for (const k of SLIDERS) a[k] = parseFloat($('cc-' + k).value);
+  return a;
+}
+
+function fmt(k, v) {
+  return k === 'red' || k === 'green' || k === 'blue' ? Number(v).toFixed(2) : Number(v).toFixed(k === 'brightness' ? 2 : 1);
+}
+
+function showAdjustments(a) {
+  $('cc-correction').value = a.correction;
+  for (const k of SLIDERS) { $('cc-' + k).value = a[k]; $('cc-' + k + '-v').textContent = fmt(k, a[k]); }
+}
+
+function setupColour(c) {
+  const sel = $('cc-correction');
+  sel.innerHTML = c.corrections.map((o) => `<option value="${esc(o.id)}">${esc(o.label)}</option>`).join('');
+  showAdjustments(c.adjustments);
+  $('colour-box').classList.toggle('disabled', !c);
+  setCcState('', '');
+}
+
+function setCcState(text, kind) {
+  const el = $('cc-state');
+  el.className = 'note save-state' + (kind ? ' ' + kind : '');
+  el.textContent = text;
+  if (kind === 'ok') {
+    el.classList.remove('flash');
+    void el.offsetWidth;
+    el.classList.add('flash');
+  }
+}
+
+function savedLabel() {
+  const time = new Date().toLocaleTimeString([], { hour: 'numeric', minute: '2-digit', second: '2-digit' });
+  return `Saved to file · ${time}`;
+}
+
+function applyPreviews(p) {
+  state.card.front = p.front;
+  state.card.back = p.back;
+  document.querySelectorAll('#stage img').forEach((img) => { img.src = img.alt === 'back' ? p.back : p.front; });
+}
+
+async function pushAdjustments(save) {
+  // one request at a time; the latest settings win
+  if (ccBusy) { ccPending = { save: save || (ccPending && ccPending.save) }; return; }
+  ccBusy = true;
+  try {
+    const r = await invoke('set_adjustments', { adj: currentAdjustments(), save: !!save });
+    applyPreviews(r.previews);
+    if (save && r.saved) setCcState(savedLabel(), 'ok');
+    else if (save) setCcState('Could not save', 'dirty');
+  } catch (e) {
+    setStatus(String(e), 'error');
+    if (save) setCcState('Could not save', 'dirty');
+  } finally {
+    ccBusy = false;
+    if (ccPending) { const p = ccPending; ccPending = null; pushAdjustments(p.save); }
+  }
+}
+
+function onAdjust(commit) {
+  for (const k of SLIDERS) $('cc-' + k + '-v').textContent = fmt(k, $('cc-' + k).value);
+  const save = commit && !!(state.card && state.card.can_save);
+  if (save) setCcState('Saving…', '');
+  if (!commit) { clearTimeout(ccTimer); ccTimer = setTimeout(() => pushAdjustments(false), 30); return; }
+  clearTimeout(ccTimer);
+  pushAdjustments(save);
+}
+
 // ---- printing ---------------------------------------------------------------------------------
 
 function jobOpts() {
@@ -91,14 +171,6 @@ function jobOpts() {
     printer: $('printer').value || null,
     sides: $('sides').value,
     copies: Math.max(1, parseInt($('copies').value, 10) || 1),
-    turn: $('turn').value,
-    fit: $('fit').value,
-    rotate_front_180: $('rot-front').checked,
-    rotate_back_180: $('rot-back').checked,
-    overcoat_front: $('oc-front').checked,
-    overcoat_back: $('oc-back').checked,
-    black: $('black').value,
-    photo_nudge: $('nudge').checked,
     extra: $('extra').value.split('\n').map((s) => s.trim()).filter(Boolean),
   };
 }
@@ -120,45 +192,12 @@ async function refreshPrinters() {
   const likely = r.printers.find((p) => /magicard|pro ?300|300/i.test(p.name));
   sel.value = keep || (likely && likely.name) || r.default || (r.printers[0] && r.printers[0].name) || '';
   $('printer-note').textContent = r.error ? r.error
-    : r.printers.length ? '' : 'No CUPS queue yet. Install the Magicard driver and add the printer (see README). You can still save jobs.';
+    : r.printers.length ? '' : 'No CUPS queue yet. Install the Magicard driver and add the printer (see README).';
   updatePrintButtons();
 }
 
 function updatePrintButtons() {
   $('btn-print').disabled = !state.card || !$('printer').value;
-  $('btn-save').disabled = !state.card;
-  $('btn-preview').disabled = !state.card;
-}
-
-function showProblems(r) {
-  const lines = [...(r.warnings || []), ...(r.problems || [])];
-  $('problems').textContent = lines.join('\n');
-  if (r.command) { $('cmd-box').classList.remove('hidden'); $('cmd').textContent = r.command; }
-}
-
-async function previewJob() {
-  try {
-    setStatus('Building print pages…');
-    const r = await invoke('preview_job', { opts: jobOpts() });
-    const box = $('print-preview');
-    box.classList.remove('hidden');
-    box.innerHTML = `<h3>Print preview: the raster pages sent to the driver (638×1013, portrait)</h3>
-      <div class="small" style="color:var(--muted)">If the saved card does not look like this on paper, change the Orientation settings and print the calibration card again.</div>
-      <div class="pages">${r.pages.map((p) => `<div><div class="small" style="color:var(--muted)">${esc(p.label)}</div><img src="${p.png}" alt="${esc(p.label)}"></div>`).join('')}</div>`;
-    showProblems(r);
-    setStatus('Preview ready', 'ok');
-    box.scrollIntoView({ behavior: 'smooth', block: 'start' });
-  } catch (e) { setStatus(String(e), 'error'); }
-}
-
-async function saveJob() {
-  try {
-    const dir = await T.dialog.open({ directory: true, multiple: false, title: 'Choose a folder for the job files' });
-    if (!dir) return;
-    setStatus('Saving job…');
-    const files = await invoke('save_job', { opts: jobOpts(), dir: Array.isArray(dir) ? dir[0] : dir });
-    setStatus('Saved:\n' + files.join('\n'), 'ok');
-  } catch (e) { setStatus(String(e), 'error'); }
 }
 
 async function printJob() {
@@ -191,8 +230,13 @@ window.addEventListener('DOMContentLoaded', async () => {
   $('printer-refresh').onclick = refreshPrinters;
   $('printer').onchange = updatePrintButtons;
   $('sides').onchange = () => { state.userSides = true; };
-  $('btn-preview').onclick = previewJob;
-  $('btn-save').onclick = saveJob;
+  $('cc-correction').onchange = () => onAdjust(true);
+  for (const k of SLIDERS) {
+    $('cc-' + k).oninput = () => onAdjust(false);
+    $('cc-' + k).onchange = () => onAdjust(true);
+  }
+  $('cc-reset').onclick = () => { showAdjustments({ correction: 'Gamma1', ...SLIDER_DEFAULTS }); onAdjust(true); };
+  $('colour-box').classList.add('disabled');
   $('btn-print').onclick = printJob;
 
   // drag and drop (Tauri delivers real file paths)

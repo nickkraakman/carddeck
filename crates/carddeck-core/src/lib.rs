@@ -1,6 +1,7 @@
 //! CardDeck core: `.card` parsing, rendering and print-job building.
 #![allow(clippy::too_many_arguments, clippy::field_reassign_with_default, clippy::excessive_precision)]
 pub mod calibration;
+pub mod colour;
 pub mod fonts;
 pub mod model;
 pub mod print;

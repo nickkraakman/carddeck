@@ -1,171 +1,173 @@
 # CardDeck
 
 A small macOS app (Rust core + Tauri UI) that opens card designs saved as `.card` files by Magicard Hub
-and prints them through the **official Magicard macOS CUPS driver**. Personal-use tool, working name
-"CardDeck". It is not affiliated with Magicard, has no Magicard branding and ships none of their
-artwork or code. "Compatible with" is as far as the naming goes.
+and prints them through the **official Magicard macOS CUPS driver**. Personal-use tool — not affiliated
+with Magicard, ships none of their artwork or code.
 
-What it does (MVP):
+## Download (latest unsigned builds)
 
-* **Viewer**: open a `.card` (dialog, drag and drop, double click in Finder), see front and back at
-  full 1013×642 px (300 dpi CR80), zoom, front/back/both. Unsupported things produce warnings instead of errors.
-* **Print**: builds a duplex job, saves it as PDF/PNG (dry run, no printer needed) or sends it to a CUPS
-  queue with `lp` and the Magicard PPD options.
-* Not in the MVP: variables / CSV merge, barcodes other than the stored bitmap, HoloKote, mag stripe,
-  chip/HoloPatch holes, a designer.
+Every push to `main` builds unsigned arm64 and x86_64 apps:
 
+**[Latest builds on GitHub Actions →](https://github.com/nickkraakman/carddeck/actions/workflows/build.yml?query=branch%3Amain)**
+
+1. Open the newest green run on `main`.
+2. Scroll to **Artifacts**.
+3. Download:
+   - **Apple silicon** → `CardDeck-macOS-arm64` → contains `CardDeck-arm64.dmg` and `CardDeck-arm64.app.zip`
+   - **Intel Mac** → `CardDeck-macOS-x86_64` → contains `CardDeck-x86_64.dmg` and `CardDeck-x86_64.app.zip`
+
+Check your Mac: `uname -m` prints `arm64` or `x86_64`.
+
+## Allow the unsigned app (macOS Gatekeeper)
+
+The app is **ad-hoc signed, not notarized**. Gatekeeper will block a normal double-click the first time.
+
+**Preferred:**
+
+1. Open the `.dmg` (or unzip the `.app.zip`).
+2. Drag **CardDeck.app** to Applications (or leave it where you like).
+3. **Right-click** (or Control-click) **CardDeck.app** → **Open** → **Open**.
+
+**If macOS still blocks it:**
+
+1. Try to open CardDeck once (so the block is recorded).
+2. Open **System Settings → Privacy & Security**.
+3. Scroll to the security section near the bottom — you should see a message that CardDeck was blocked.
+4. Click **Open Anyway**, then confirm **Open**.
+
+**If macOS says the app is “damaged”** (quarantine attribute):
+
+```sh
+xattr -dr com.apple.quarantine /Applications/CardDeck.app
 ```
-crates/carddeck-core   parser, renderer (tiny-skia + fontdb + rustybuzz), print job, CUPS parsing
-crates/carddeck-cli    `carddeck` command line: info / render / job / calibrate / print / printers
-src-tauri              Tauri v2 desktop shell (thin: commands + file opening)
-ui/                    plain HTML/JS/CSS front end (no npm, no bundler)
-docs/                  test-print procedure
-```
 
-## Download (unsigned builds)
+Then right-click → Open again.
 
-GitHub Actions (`.github/workflows/build.yml`) builds `CardDeck-arm64.dmg` and `CardDeck-x86_64.dmg`
-(plus zipped `.app`) on every push to `main`: open the run, download the artifact.
-Apple silicon Mac: take **arm64**. Intel Mac: **x86_64**.
+## Install the Magicard macOS driver (1.5.0)
 
-The app is not notarized. First start: **right-click CardDeck.app → Open → Open**. If macOS says the
-app is "damaged": `xattr -dr com.apple.quarantine /Applications/CardDeck.app`.
+Install the official Magicard CUPS driver **before** printing. Pick the package for your CPU:
 
-## Install the Magicard driver (macOS, driver 1.5.0)
+| Mac | Package |
+|---|---|
+| Apple silicon (`arm64`) | [magicard_ltd-mac-os-driver-1.5.0-arm64.pkg](https://storage.googleapis.com/public_drivers/macos/1.5.0/magicard_ltd-mac-os-driver-1.5.0-arm64.pkg) |
+| Intel (`x86_64`) | [magicard_ltd-mac-os-driver-1.5.0-x86_64.pkg](https://storage.googleapis.com/public_drivers/macos/1.5.0/magicard_ltd-mac-os-driver-1.5.0-x86_64.pkg) |
 
-Download the package for your Mac (`uname -m` prints `arm64` or `x86_64`):
-
-* Apple silicon: <https://storage.googleapis.com/public_drivers/macos/1.5.0/magicard_ltd-mac-os-driver-1.5.0-arm64.pkg>
-* Intel: <https://storage.googleapis.com/public_drivers/macos/1.5.0/magicard_ltd-mac-os-driver-1.5.0-x86_64.pkg>
-
-1. Open the `.pkg`. If Gatekeeper complains, right-click → Open, or System Settings → Privacy & Security → "Open Anyway".
+1. Open the `.pkg`. If Gatekeeper complains: right-click → Open, or **System Settings → Privacy & Security → Open Anyway**.
 2. Connect the printer by USB and switch it on.
-3. System Settings → Printers & Scanners → **Add Printer…** → choose the Magicard in the list (driver "Magicard …").
-   If it is not offered, add it with a manual driver pick. Magicard's page also describes adding the queue through
-   the CUPS web UI (`http://localhost:631`) on macOS versions that still ship it.
-4. Check from Terminal:
-   ```sh
-   lpstat -p                                   # the queue name, e.g. Magicard_300
-   lpoptions -p <queue> -l | grep -E 'UTDuplex|CFColourFormat|CFBlackResin|CFOverCoat|CFRotation|PageSize'
-   ```
-   CardDeck needs these option names. The app checks them for you (Preview shows problems if one is missing).
+3. **System Settings → Printers & Scanners → Add Printer…** → choose the Magicard (driver name starts with “Magicard”).
+4. Confirm from Terminal:
 
-## First test print checklist
+```sh
+lpstat -p
+lpoptions -p <queue> -l | grep -E 'UTDuplex|CFColourFormat|CFBlackResin|CFOverCoat|ColourCorrection|PageSize'
+```
 
-Full procedure with a decision table: [docs/TEST-PRINT.md](docs/TEST-PRINT.md). Short version:
+CardDeck needs those option names. A queue that is not a Magicard driver will reject the options it does not know.
 
-- [ ] Driver installed, printer on, queue visible in CardDeck's printer list (↻ to refresh).
-- [ ] Ribbon and a spare blank card loaded.
-- [ ] Open **Calibration card**. Press **Preview print pages**: the pages are portrait, red square bottom-left, "TOP" arrow on the left.
-- [ ] **Save job (PDF + PNG)…** once and open `job.pdf` in Preview. It must be 153×243 pt, 2 pages.
-- [ ] Print **Front only** with default settings. Compare with the on-screen card: red square top-left, TOP arrow at the top edge, text reads left to right (not mirrored, not upside down).
-- [ ] Wrong? Change Orientation (Rotate front 180° / Turn direction) and print again until front is right.
-- [ ] Print **Back only**; fix with "Rotate back 180°" if needed.
-- [ ] Print **Both** (one duplex job). Front and back must both be upright.
-- [ ] Black check: the pure-black text and the black square print as resin (crisp, matte black, no colour fringe). "Near black" text prints as composite.
-- [ ] Edge check: the thin black frame is visible on all four edges (if one side is cut, see the fit options).
-- [ ] Only then print a real card. Write the winning settings down; the app does not remember them yet.
+## Install Minion Pro and Myriad Pro
 
-## Build, run, test
+Hub designs usually name **Myriad Pro** and **Minion Pro**. macOS does not ship them. Without them CardDeck
+falls back (Helvetica Neue / Times, etc.) and text spacing will not match Hub.
 
-Prerequisites: Rust (stable, `rustup`), macOS with Xcode command line tools for the app. The core and CLI build and test on Linux and macOS.
+1. Obtain the fonts legally (Adobe Fonts / your Creative Cloud entitlement, or whatever license you already have).
+2. Install them for your user, either:
+   - **Font Book** → File → Add Fonts… → select the `.otf` / `.ttf` files, or
+   - Copy the font files into `~/Library/Fonts/`.
+3. Quit and reopen CardDeck so it rescans fonts.
+
+Optional overrides (if you want a different substitute family) go in:
+
+`~/Library/Application Support/dev.carddeck.desktop/fonts.json`
+
+```json
+{
+  "myriad pro": ["Avenir Next", "Helvetica Neue"],
+  "minion pro": ["Charter", "Times New Roman"]
+}
+```
+
+You can also drop extra font files in `~/Library/Application Support/dev.carddeck.desktop/fonts/`.
+
+## Print a `.card` file
+
+1. Install the Magicard driver and add the printer (above).
+2. Open CardDeck → **Open…** (or drop a `.card` onto the window, or double-click a `.card` after setting CardDeck as the default app).
+3. Check front/back in the viewer. Warnings at the top mean something was skipped or approximated.
+4. In the Print panel:
+   - Choose the Magicard **Printer** (↻ to refresh).
+   - Set **Sides** and **Copies**. Overcoat is always applied to both sides.
+   - Colour is set in the **Colour** panel above Print (see below). The chosen Colour Correct mode is sent to the printer as the matching `ColourCorrection` option. Sliders are applied to the printed bitmap as well. Gamma is not: the driver colour-matches it.
+5. Click **Print…** and confirm. That sends `lp` with the Magicard PPD options (uses a blank card + ribbon).
+   A dry run without the app: `carddeck job my.card out/job` writes `job.pdf`, page PNGs and `command.txt`.
+
+### Colour correction
+
+The **Colour** panel has Hub's **Colour Correct** drop-down (None, Gamma 1, Gamma 2, Absolute / Relative
+Colorimetric, Perceptual, Saturation) and the Brightness / Contrast / Saturation / Red / Green / Blue sliders. They start
+from the card's saved `adjustments`; **Reset** returns to Hub's defaults (Gamma 1, sliders neutral). Changes show in the
+viewer immediately and are written back into the `.card` file's `adjustments` block. **Saved to file** flashes with the time of each write.
+
+The Colour Correct mode goes to the driver as a PPD option. Perceptual / Saturation / Relative / Absolute are **not**
+also applied to the bitmap (the driver would correct them twice). Gamma 1/2 are not baked either: doing that and
+sending `ColourCorrection=None` printed light, washed-out cards. They both send Driver managed, and the driver
+colour-matches. Sliders have no driver options, so the app always bakes those into the bitmap first.
+
+| Colour Correct | What the app sends |
+|---|---|
+| None | `ColourCorrection=0ColourCorrection` |
+| Gamma 1 / Gamma 2 | `ColourCorrection=1ColourCorrection` (Driver managed; the bitmap is not pre-corrected) |
+| Perceptual | `ColourCorrection=2ColourCorrection` |
+| Saturation | `ColourCorrection=3ColourCorrection` |
+| Relative Colorimetric | `ColourCorrection=4ColourCorrection` |
+| Absolute Colorimetric | `ColourCorrection=5ColourCorrection` |
+
+Details, fit method and error numbers: [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
+CLI: `carddeck adjust my.card --correction Perceptual --saturation 1`. A CLI print matches the app's bake only with `--bake-adjustments`.
+
+First hardware run: use **Calibration card** and the checklist in [docs/TEST-PRINT.md](docs/TEST-PRINT.md).
+
+### Finder “Open with”
+
+Get Info on a `.card` → Open with → CardDeck → **Change All…**. After that, double-click opens in CardDeck. The app also registers the `.card` extension in its bundle.
+
+## What CardDeck does (and does not)
+
+* **Does:** view `.card` front/back at 300 dpi CR80, build duplex print jobs, talk to the official Magicard CUPS driver, preview and edit Hub’s **Colour Correct** and Brightness/Contrast/Saturation/RGB adjustments (saved back to the file), and send the matching `ColourCorrection` option to the driver.
+* **Does not (yet):** designer, CSV/variables, HoloKote, mag stripe, chip/HoloPatch holes, Hub’s sharpen filter.
+
+```
+crates/carddeck-core   parser, renderer, print job, CUPS parsing
+crates/carddeck-cli    headless CLI: info / render / job / calibrate / print / printers
+src-tauri              Tauri v2 desktop shell
+ui/                    plain HTML/JS/CSS (no npm)
+docs/                  test-print procedure, colour-correction notes
+tools/                 gen-lut.py (colour table repack), colour-fit/ (how Gamma 1/2 were fitted)
+```
+
+## Build from source
 
 ```sh
 # core + CLI (any OS)
 cargo test --workspace --release
 cargo run -p carddeck-cli --release -- info my.card
-cargo run -p carddeck-cli --release -- render my.card out/            # front/back PNGs
-cargo run -p carddeck-cli --release -- job my.card out/job --sides both   # dry run: job.pdf, page PNGs, command.txt
-cargo run -p carddeck-cli --release -- calibrate out/cal                  # calibration card job
-cargo run -p carddeck-cli --release -- printers
 
 # desktop app (macOS)
 cargo install tauri-cli --version "^2" --locked
 cd src-tauri
-cargo tauri dev                              # run
-cargo tauri build --bundles app,dmg          # unsigned CardDeck.app / .dmg in src-tauri/target/release/bundle
-cargo tauri build --target x86_64-apple-darwin --bundles app,dmg   # Intel build on an Apple-silicon Mac
+cargo tauri dev
+cargo tauri build --bundles app,dmg
+cargo tauri build --target x86_64-apple-darwin --bundles app,dmg   # Intel build on Apple silicon
 ```
-
-Open from the command line: `open -a CardDeck my.card`, or double click a `.card` after setting CardDeck as the default app
-(Finder → Get Info → Open with → CardDeck → Change All…). The bundle declares the `.card` extension.
-
-### Tests
-
-* `crates/carddeck-core/tests/synthetic.rs`: 22 tests on generated cards (transforms, fills, strokes, clip,
-  text alignment, photo-black nudge, orientation of the print page, PDF structure, `lp` command snapshot, `lpstat`/`lpoptions` parsing).
-* `crates/carddeck-core/tests/samples.rs`: numeric comparison against real Hub files. These files are private
-  and **not in the repo** (`samples/` is git-ignored). Put `.card` files in `samples/` (or set `CARDDECK_SAMPLES=/path`) and run
-  `cargo test --release -p carddeck-core --test samples -- --nocapture`. Without samples the tests print SKIP.
-  They compare our render of the front side with the Hub-generated `about.preview` (mean absolute difference per RGB channel, 0..255),
-  with and without the text boxes, check both sides against reference renders, and decode every QR code with an independent decoder.
-
-Results with 12 real files (Hub 2.0.6/2.0.8) on Linux with Liberation fonts as substitutes:
-
-| Check | Result |
-|---|---|
-| front vs Hub `about.preview`, whole image | mean abs diff 6.0 / 255 (worst 6.4): almost all of it is font substitution |
-| front vs preview, outside text boxes (shapes, images, QR) | mean 1.3 (worst 2.8: `test.card`, whose saved preview is stale) |
-| both sides vs the Pillow reference renders | front 4.7, back 2.9 |
-| stored QR bitmaps decode to their `qrData` | 24/24 |
-| QR codes still scan after the full render | 24/24 |
-| regenerated QR (if a bitmap is missing) decodes to `qrData` | 24/24 |
-| `job.pdf` rasterised at 300 dpi by poppler vs the page PNG | 638×1013, mean diff 0.0 (pixel exact) |
-
-## How printing works
-
-1. Each side is rendered to 1013×642 RGB (transparent card corners become white).
-2. Photos: pure `#000000` pixels become `(1,1,1)`. The Magicard driver puts a pixel on the black resin (K) panel only
-   if it is exactly RGB 0,0,0, so only text and shapes that you coloured `#000000` print with resin. (Same rule Hub uses.)
-3. The landscape bitmap is turned into the driver's portrait raster page (`PageSize 1XCR80` = 153×243 pt = 638×1013 px).
-   Default: counter-clockwise 90°, then cropping 2 px from each long edge (no resampling, so pure black stays pure; "Stretch" is the alternative).
-4. A lossless PDF is written: one page per side, odd page front, even page back, DeviceRGB, page box 153×243 pt.
-   Copies are expanded into the page list so duplex pairing cannot break.
-5. `lp -d <queue> -n 1 -o PageSize=1XCR80 -o UTDuplex=1Both -o CFColourFormat=1ColourYMCK -o CFBlackResin=0BlackResinK -o CBColourFormat=… -o CBBlackResin=… -o CFOverCoat=1PrintOvercoat -o CBOverCoat=… -o print-scaling=none job.pdf`
-
-| UI setting | PPD option(s) |
-|---|---|
-| Sides | `UTDuplex` = `0Front` / `1Both` / `2Back` |
-| Black: resin K | `CFColourFormat`/`CBColourFormat` = `1ColourYMCK`, `CFBlackResin`/`CBBlackResin` = `0BlackResinK` |
-| Black: composite | `0ColourYMC`, `1BlackResinYMC` |
-| Black: mono K | `2MonoK`, `0BlackResinK` |
-| Overcoat | `CFOverCoat` / `CBOverCoat` = `1PrintOvercoat` / `0PrintNoOvercoat` |
-| Advanced extra options | any `NAME=VALUE`, for example `CFRotation=1Rotation` (the driver's own 180° option) |
-
-The option names come from the GPL Magicard driver PPDs (`pro300.ppd`) and the macOS driver package ships the same names;
-the real PPD of the installed queue is checked with `lpoptions -p <queue> -l` when you preview.
-
-## Fonts
-
-Cards only store a font family. Designs seen so far use Myriad Pro, Minion Pro and Georgia, which macOS does not have.
-Fallbacks (first installed wins): Myriad Pro → Helvetica Neue → Helvetica → Arial; Minion Pro → Times New Roman → Times → Georgia;
-Georgia → Georgia → Times New Roman; Arial → Arial → Helvetica Neue; Courier New → Courier New → Courier → Menlo.
-Because Myriad Pro is about 10 % narrower than Helvetica, substituted text is squeezed horizontally (Myriad 90 %; up to 75 % if a box
-would otherwise overflow or lose lines). If you own the real fonts, install them and they are used automatically. Override per design font with
-`~/Library/Application Support/dev.carddeck.desktop/fonts.json`:
-
-```json
-{ "myriad pro": ["Avenir Next", "Helvetica Neue"], "minion pro": ["Charter", "Times New Roman"] }
-```
-
-Extra font files can be dropped in `~/Library/Application Support/dev.carddeck.desktop/fonts/`.
 
 ## Known limitations
 
-* **Unsigned app** (ad-hoc signature, not notarized): right-click → Open on first launch.
-* **Orientation of the raster page is UNVERIFIED** on real hardware. The default (counter-clockwise, front and back alike) is derived by reading the
-  GPL driver source, nothing more. Rotation and turn direction are visible settings; calibrate once with the test-print procedure.
-* **Fonts**: substitutes differ in shape from Myriad/Minion; line breaks and text widths can differ from Hub. Colours and shapes match closely, text does not match exactly.
-* The driver does colour correction itself; Hub's `adjustments` block (gamma, RGB multipliers) is ignored. macOS colour management in the PDF-to-raster
-  filter could in theory alter exact `0,0,0`; the black check in the test-print checklist catches that.
-* Not handled: variable/CSV data, barcode regeneration (the stored bitmap is drawn), HoloKote, HoloPatch, mag stripe, chip/slot overcoat holes
-  (flags in the file only raise a warning), dark-card specifics, Xtended/CR79 page sizes (CR79 and Xtended render but the print page is fixed to CR80),
-  image/gradient fills are implemented from code reading and have never been checked against a real file.
-* Rendering with a different engine than Hub's WebView: sub-pixel differences at shape edges (mean error about 1 of 255 outside text).
-* Settings are not persisted between launches.
-* The app was only compiled and run headless on Linux; the macOS-specific bits (file association, `Opened` event, dialogs) are built by CI and untested until you run them.
+* Unsigned / not notarized — see Gatekeeper steps above.
+* Raster page orientation defaults are derived from the public driver; calibrate once on real hardware ([docs/TEST-PRINT.md](docs/TEST-PRINT.md)).
+* Font substitutes change text metrics vs Hub unless Myriad Pro / Minion Pro are installed.
+* Colour: the preview of Perceptual / Saturation / Relative / Absolute is exact (the driver’s own table) and that table is applied by the driver at print time. **Gamma 1/2 are fitted approximations** of Hub’s screen, and the print uses the driver’s Driver managed profile instead (baking the screen curve and turning the driver off printed light, washed-out cards). Gamma 1 and Gamma 2 therefore print the same. Sliders are baked in (the driver has no slider options); that can move pure black off `#000000`, so resin K may not catch it. Hub’s sharpen is not reproduced. See [docs/COLOUR-CORRECTION.md](docs/COLOUR-CORRECTION.md).
+* Not handled: variable data, barcode regeneration, HoloKote / HoloPatch / mag / chip cut-outs, dark-card specifics, non-CR80 page sizes for printing.
 
 ## Legal / provenance
 
-Clean-room: the renderer and print code were written from observed behaviour of real files and the public driver option names.
-No Hub code, assets or sample cards are included. The Magicard driver is GPL and is only *used* (via CUPS), never linked or copied.
+Clean-room: renderer and print code from observed `.card` behaviour and public Magicard driver option names.
+No Hub code, assets, or sample cards are in this repository. The Magicard driver is GPL and is only *used* via CUPS, **except** the colour table for the Perceptual / Saturation / Relative / Absolute preview, which is taken from the GPL Linux driver and makes the built app GPL-2.0-or-later. See [LICENSE-GPL-NOTES.md](LICENSE-GPL-NOTES.md) (the repository has no `LICENSE` file yet; GPL-2.0-or-later is recommended).

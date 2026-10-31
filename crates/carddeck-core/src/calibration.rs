@@ -53,5 +53,8 @@ pub fn calibration_card() -> Card {
         "front": side("FRONT", "#d02020"),
         "back": side("BACK", "#1060d0"),
     });
-    Card::parse(&serde_json::to_vec(&doc).unwrap()).expect("calibration card is valid")
+    let mut card = Card::parse(&serde_json::to_vec(&doc).unwrap()).expect("calibration card is valid");
+    // The calibration card must show its exact colours: no preview correction.
+    card.adjustments = crate::colour::Adjustments::identity();
+    card
 }

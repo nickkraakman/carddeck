@@ -6,6 +6,7 @@
 
 use serde_json::{Map, Value};
 
+use crate::colour::Adjustments;
 use crate::Error;
 
 #[derive(Debug, Clone)]
@@ -13,6 +14,10 @@ pub struct Card {
     pub about: About,
     pub front: Side,
     pub back: Side,
+    /// The file's `adjustments` block (Hub's colour correction + sliders), or Hub's default when absent.
+    pub adjustments: Adjustments,
+    /// Whether the file had an `adjustments` block at all.
+    pub has_adjustments: bool,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -124,7 +129,9 @@ impl Card {
             .map_err(|e| Error::Parse(format!("front: {e}")))?;
         let back = parse_side(obj.get("back"), default_w, default_h)
             .map_err(|e| Error::Parse(format!("back: {e}")))?;
-        Ok(Card { about, front, back })
+        let has_adjustments = obj.get("adjustments").map(|v| v.is_object()).unwrap_or(false);
+        let adjustments = Adjustments::from_json(obj.get("adjustments"));
+        Ok(Card { about, front, back, adjustments, has_adjustments })
     }
 
     pub fn from_file(path: &std::path::Path) -> Result<Card, Error> {
